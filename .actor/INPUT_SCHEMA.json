@@ -1,0 +1,66 @@
+{
+  "title": "Markdown RAG Chunker",
+  "description": "Create RAG-ready Markdown chunks with header-aware structure, token-aware sizing, and predictable run limits.",
+  "type": "object",
+  "schemaVersion": 1,
+  "properties": {
+    "input_mode": {
+      "title": "Input Mode",
+      "type": "string",
+      "description": "Use text to paste Markdown directly. Use file to load and convert a supported file format from an HTTPS URL or kvs://KEY.",
+      "enum": ["text", "file"],
+      "default": "file"
+    },
+    "markdown_text": {
+      "title": "Markdown Text",
+      "type": "string",
+      "description": "Paste Markdown content here when input_mode is text.",
+      "editor": "textarea",
+      "default": "# Header 1\nHello, World!\n## Header 2\nGoodbye, World!"
+    },
+    "markdown_file": {
+      "title": "Markdown File Source",
+      "type": "string",
+      "description": "When input_mode is file, provide an HTTPS URL to Markdown, HTML, PDF, Word, Excel, PowerPoint, CSV, JSON, XML, EPUB, and more. You can also provide an Apify Key-Value Store record like kvs://MARKDOWN_INPUT.",
+      "editor": "textfield",
+      "default": "https://en.wikipedia.org/wiki/Giant_panda",
+      "prefill": "https://en.wikipedia.org/wiki/Giant_panda"
+    },
+    "headers_to_split_on": {
+      "title": "Headers to Split On",
+      "type": "array",
+      "description": "Markdown header levels to split on, such as ['#', '##']. Content under headers not listed is merged into parent sections.",
+      "editor": "stringList",
+      "default": ["#", "##", "###", "####", "#####", "######"]
+    },
+    "strip_headers": {
+      "title": "Strip Headers",
+      "type": "boolean",
+      "description": "When true, header text is moved to metadata only. Use true for embedding pipelines and false for human-readable chunks.",
+      "default": true
+    },
+    "max_chunk_chars": {
+      "title": "Max Chunk Chars",
+      "type": "integer",
+      "description": "Optional cap for chunk length in characters. Only oversized chunks are re-split. A common starting point is 1800 chars (about 450 tokens).",
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "max_input_chars": {
+      "title": "Max Input Chars",
+      "type": "integer",
+      "description": "Hard limit for input size in characters. Runs fail fast when exceeded to protect cost and runtime.",
+      "default": 500000,
+      "minimum": 1,
+      "maximum": 5000000
+    },
+    "max_chunks": {
+      "title": "Max Chunks",
+      "type": "integer",
+      "description": "Safety cap on total output chunks. Increase only for very large documents.",
+      "default": 5000,
+      "minimum": 1,
+      "maximum": 50000
+    }
+  }
+}

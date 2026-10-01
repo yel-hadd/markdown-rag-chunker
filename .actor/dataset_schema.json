@@ -1,0 +1,115 @@
+{
+  "actorSpecification": 1,
+  "fields": {
+    "type": "object",
+    "properties": {
+      "chunks": {
+        "type": "array",
+        "title": "Chunks",
+        "description": "RAG-ready markdown chunks for embedding models and vector database ingestion.",
+        "items": {
+          "type": "object",
+          "properties": {
+            "content": {
+              "type": "string",
+              "title": "Content",
+              "description": "Chunk text content to send to your embedding model."
+            },
+            "metadata": {
+              "type": "object",
+              "title": "Metadata",
+              "description": "Header hierarchy metadata, typically keys such as Header 1, Header 2, and Header 3."
+            },
+            "chunk_id": {
+              "type": "string",
+              "title": "Chunk ID",
+              "description": "Stable identifier for idempotent upserts, deduplication, and cache keys in downstream vector workflows."
+            },
+            "char_count": {
+              "type": "integer",
+              "title": "Character Count",
+              "description": "Number of characters in the chunk content."
+            },
+            "token_count": {
+              "type": "integer",
+              "title": "Estimated Token Count",
+              "description": "Approximate token count for embedding budget planning, based on roughly 1 token per 4 characters."
+            }
+          },
+          "required": ["content", "metadata", "chunk_id", "char_count", "token_count"]
+        }
+      },
+      "metrics": {
+        "type": "object",
+        "title": "Run Metrics",
+        "description": "Telemetry about the chunking run.",
+        "properties": {
+          "input_mode": {
+            "type": "string",
+            "title": "Input Mode",
+            "description": "Input source mode used for this run.",
+            "enum": ["text", "file"]
+          },
+          "input_file_type": {
+            "type": "string",
+            "title": "Input File Type",
+            "description": "Detected MIME type of the source file, or text/markdown for direct text input."
+          },
+          "input_chars": {
+            "type": "integer",
+            "title": "Input Character Count",
+            "description": "Total source markdown length in characters."
+          },
+          "chunk_count": {
+            "type": "integer",
+            "title": "Chunk Count",
+            "description": "Total number of chunks produced."
+          },
+          "elapsed_ms": {
+            "type": "integer",
+            "title": "Elapsed Milliseconds",
+            "description": "Total processing time in milliseconds from input parsing to dataset push."
+          }
+        },
+        "required": ["input_mode", "input_file_type", "input_chars", "chunk_count", "elapsed_ms"]
+      },
+      "error": {
+        "type": "string",
+        "title": "Error",
+        "description": "Error details when processing fails."
+      }
+    },
+    "required": ["chunks"]
+  },
+  "views": {
+    "overview": {
+      "title": "Overview",
+      "description": "Run-level summary and chunk payload.",
+      "transformation": {
+        "fields": [
+          "metrics.chunk_count",
+          "metrics.input_mode",
+          "metrics.input_file_type",
+          "metrics.input_chars",
+          "metrics.elapsed_ms",
+          "error"
+        ],
+        "flatten": ["metrics"]
+      },
+      "display": {
+        "component": "table",
+        "properties": {
+          "metrics.chunk_count": { "label": "Chunk Count", "format": "number" },
+          "metrics.input_mode": { "label": "Input Mode", "format": "text" },
+          "metrics.input_file_type": { "label": "Input File Type", "format": "text" },
+          "metrics.input_chars": { "label": "Source Size (chars)", "format": "number" },
+          "metrics.elapsed_ms": {
+            "label": "Processing Time (ms)",
+            "format": "number"
+          },
+          "error": { "label": "Error", "format": "text" }
+        }
+      }
+    }
+  }
+}

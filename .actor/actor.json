@@ -1,0 +1,16 @@
+{
+  "actorSpecification": 1,
+  "name": "markdown-rag-chunker",
+  "title": "Markdown RAG Chunker",
+  "description": "Chunk any document for RAG — PDF, HTML, Word, Excel, PPTX, Markdown and more. Header-aware splits with token counts and stable IDs.",
+  "version": "1.0",
+  "buildTag": "latest",
+  "dockerfile": "./Dockerfile",
+  "defaultMemoryMbytes": 256,
+  "minMemoryMbytes": 128,
+  "maxMemoryMbytes": 512,
+  "output": "./output_schema.json",
+  "storages": {
+    "dataset": "./dataset_schema.json"
+  }
+}
