@@ -2,7 +2,7 @@
   "actorSpecification": 1,
   "name": "markdown-rag-chunker",
   "title": "Markdown RAG Chunker",
-  "description": "Chunk documents for RAG and embeddings — PDF, HTML, Word, Excel, PowerPoint, EPUB and Markdown. Header-aware text splitting with token counts, deterministic chunk IDs and vector-database-ready output.",
+  "description": "Convert PDF, HTML, Word, Excel, PowerPoint, EPUB and Markdown into header-aware RAG chunks with stable IDs, token counts and proxy support. Pay per chunk — no subscription.",
   "version": "1.1",
   "buildTag": "latest",
   "dockerfile": "./Dockerfile",

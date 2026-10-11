@@ -1,6 +1,8 @@
 **Markdown RAG Chunker** converts PDFs, web pages, Word, Excel, PowerPoint, EPUB, and Markdown documents into clean, **header-aware chunks** for embeddings and vector databases — with deterministic IDs, token estimates, and pay-per-chunk pricing. No subscription, no chunking code to maintain. Built for AI engineers shipping RAG pipelines who need predictable, repeatable splits.
 
-[Run it now in Apify Console](https://console.apify.com/actors/84h4GucI0gbo1SrN7) — paste Markdown or drop a document URL and press Start.
+[Run it now in Apify Console](https://console.apify.com/actors/84h4GucI0gbo1SrN7?fpr=use-apify) — paste Markdown or drop a document URL and press Start.
+
+**Open source (MIT)**: [github.com/yel-hadd/markdown-rag-chunker](https://github.com/yel-hadd/markdown-rag-chunker) — issues and pull requests welcome.
 
 ## What does Markdown RAG Chunker do?
 
@@ -33,7 +35,7 @@ Provide files as an `http(s)://` URL or as an [Apify Key-Value Store](https://do
 4. If the source site blocks bots, enable **Use Apify Proxy** or enter your own **Proxy URL** (free).
 5. Press **Start**. Each chunk lands in the default dataset as its own item; run totals appear in the run's **Output**.
 
-Then pipe each item's `content` into your embedding model and store `chunk_id` and `metadata` next to the vector. The full input form is documented under the [Input](https://apify.com/codepoetry/markdown-rag-chunker/input-schema) tab; field types live under [Output](https://apify.com/codepoetry/markdown-rag-chunker/output-schema).
+Then pipe each item's `content` into your embedding model and store `chunk_id` and `metadata` next to the vector. The full input form is documented under the [Input](https://apify.com/codepoetry/markdown-rag-chunker/input-schema?fpr=use-apify) tab; field types live under [Output](https://apify.com/codepoetry/markdown-rag-chunker/output-schema?fpr=use-apify).
 
 ## Output format
 
@@ -76,7 +78,7 @@ Run-level metrics come back as the run's named **Output** (never billed as datas
 
 This Actor uses [pay-per-event pricing](https://docs.apify.com/platform/actors/publishing/monetize/pay-per-event): **you pay per chunk produced**, at the same rate for every input format.
 
-- **$0.80 per 1,000 chunks** on the FREE and BRONZE plans (lower on higher plans — see the [Pricing](https://apify.com/codepoetry/markdown-rag-chunker/pricing) tab)
+- **$0.80 per 1,000 chunks** on the FREE and BRONZE plans (lower on higher plans — see the [Pricing](https://apify.com/codepoetry/markdown-rag-chunker/pricing?fpr=use-apify) tab)
 - Each run also incurs Apify's standard actor-start event (a fraction of a cent)
 - Run metrics are returned as the named Output and are **not** billed
 - No monthly fee — unused months cost nothing
@@ -105,10 +107,10 @@ The two options are mutually exclusive; neither changes chunk pricing.
 | Formats | PDF, HTML, DOCX, XLSX, PPTX, EPUB, CSV, JSON, XML, MD | Web pages, PDF (scrape-centric) | Whatever you wire up |
 | Splitting | Header-aware + token-aware cap, header chain in metadata | Markdown + chunk endpoints | Fixed char/token windows, no structure |
 | Stable IDs for vector upserts | Built in | No | DIY |
-| JS-rendered sites / site crawling | No (pair with [Website Content Crawler](https://apify.com/apify/website-content-crawler)) | Yes | No |
+| JS-rendered sites / site crawling | No (pair with [Website Content Crawler](https://apify.com/apify/website-content-crawler?fpr=use-apify)) | Yes | No |
 | Runs on | Apify (scheduling, API, MCP, storage included) | Firecrawl platform / self-host | Your infra |
 
-If you need JS rendering and full-site crawls in one product, Firecrawl is a good fit. If you already have documents or Markdown and need cheap, deterministic, header-aware chunking with stable IDs — or you want to chunk [Website Content Crawler](https://apify.com/apify/website-content-crawler) output on Apify — this Actor does exactly that, without a subscription.
+If you need JS rendering and full-site crawls in one product, Firecrawl is a good fit. If you already have documents or Markdown and need cheap, deterministic, header-aware chunking with stable IDs — or you want to chunk [Website Content Crawler](https://apify.com/apify/website-content-crawler?fpr=use-apify) output on Apify — this Actor does exactly that, without a subscription.
 
 ## Use cases
 
@@ -116,7 +118,7 @@ If you need JS rendering and full-site crawls in one product, Firecrawl is a goo
 - **Knowledge bases**: ingest internal PDFs and Word docs into a vector store with stable IDs
 - **Customer support search**: chunk help-center articles for semantic search
 - **AI agents**: serve large reference documents to agents in budget-sized slices
-- **Crawler post-processing**: chain after [Website Content Crawler](https://apify.com/apify/website-content-crawler) to turn crawled pages into RAG-ready chunks
+- **Crawler post-processing**: chain after [Website Content Crawler](https://apify.com/apify/website-content-crawler?fpr=use-apify) to turn crawled pages into RAG-ready chunks
 
 ## FAQ
 
@@ -130,7 +132,7 @@ Fixed-size splitters cut every N characters, slicing through paragraphs and drop
 
 ### Can I chain it with a web crawler?
 
-Yes — a common pipeline is **[Website Content Crawler](https://apify.com/apify/website-content-crawler) → Markdown RAG Chunker → embeddings → vector DB**. The crawler produces clean Markdown per page; this Actor splits it into chunks with stable IDs.
+Yes — a common pipeline is **[Website Content Crawler](https://apify.com/apify/website-content-crawler?fpr=use-apify) → Markdown RAG Chunker → embeddings → vector DB**. The crawler produces clean Markdown per page; this Actor splits it into chunks with stable IDs.
 
 ### Does it work with LangChain or LlamaIndex?
 
@@ -142,7 +144,7 @@ It's a fast estimate (~1 token per 4 characters) for budget planning and guardra
 
 ### Where do I find API examples?
 
-The [API](https://apify.com/codepoetry/markdown-rag-chunker/api), [Python](https://apify.com/codepoetry/markdown-rag-chunker/api/python), [JavaScript](https://apify.com/codepoetry/markdown-rag-chunker/api/javascript), [CLI](https://apify.com/codepoetry/markdown-rag-chunker/api/cli), [OpenAPI](https://apify.com/codepoetry/markdown-rag-chunker/api/openapi), and [MCP](https://apify.com/codepoetry/markdown-rag-chunker/api/mcp) tabs on this Actor's page include ready-to-paste code with the correct Actor ID and input shape for every supported client.
+The [API](https://apify.com/codepoetry/markdown-rag-chunker/api?fpr=use-apify), [Python](https://apify.com/codepoetry/markdown-rag-chunker/api/python?fpr=use-apify), [JavaScript](https://apify.com/codepoetry/markdown-rag-chunker/api/javascript?fpr=use-apify), [CLI](https://apify.com/codepoetry/markdown-rag-chunker/api/cli?fpr=use-apify), [OpenAPI](https://apify.com/codepoetry/markdown-rag-chunker/api/openapi?fpr=use-apify), and [MCP](https://apify.com/codepoetry/markdown-rag-chunker/api/mcp?fpr=use-apify) tabs on this Actor's page include ready-to-paste code with the correct Actor ID and input shape for every supported client.
 
 ## What's new
 
