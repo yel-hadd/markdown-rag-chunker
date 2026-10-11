@@ -14,9 +14,20 @@ Only **synthetic events** (fired and named by the Apify platform) are billed. Th
 | Event name | Type | Trigger | FREE | BRONZE | SILVER | GOLD/PLATINUM/DIAMOND |
 | --- | --- | --- | --- | --- | --- | --- |
 | `apify-actor-start` | Synthetic | Auto-charged at run start by Apify | default (`$0.00005`) | default | default | default |
-| `apify-default-dataset-item` | Synthetic | Auto-charged on every `Actor.push_data()` call by Apify | `$0.0008` | `$0.0008` | `$0.0007` | `$0.0006` |
+| `apify-default-dataset-item` | Synthetic | Auto-charged on **every pushed dataset item** — since v1.1 the Actor pushes one item per chunk | `$0.0008` | `$0.0008` | `$0.0007` | `$0.0006` |
 
 Equivalent to **$0.80 per 1,000 chunks** at the FREE/BRONZE tier — competitive against `labrat011/rag-content-chunker` ($0.50/1k, text-only) and `hedelka/pdf-to-markdown-rag` ($1.00/1k, PDF-only). Justified by the multi-format conversion this Actor offers (PDF, DOCX, XLSX, PPTX, HTML, EPUB, etc.).
+
+> **v1.1 note:** before v1.1 the Actor pushed a single wrapped item per run, so users paid
+> ~$0.0008 per *run* regardless of chunk count — undercharging vs. the published per-chunk
+> price (and below cost on large runs). The per-item push in `src/main.py` makes the
+> published per-chunk pricing literally true. Run metrics moved to the `OUTPUT` record
+> (`Actor.set_value("OUTPUT", ...)`), which does not fire the dataset-item event.
+
+> **Proxy billing (v1.1):** `proxy_url` (user's own proxy) is free — no Apify charges.
+> `use_apify_proxy` routes the fetch through Apify Proxy, billed to the *user* as standard
+> platform usage on their plan, exactly like any other Actor's proxy traffic. Neither
+> option creates creator-side cost, so neither needs an event price.
 
 ### Rules for synthetic events
 - `apify-actor-start`: **do not change the price**. Apify subsidises the first 5 seconds of compute for each run when this event is active. Deleting it forfeits that subsidy. The SDK blocks any attempt to manually charge it.
@@ -36,19 +47,22 @@ None. The Actor code does not call `Actor.charge()`. If you previously had a `do
 ## Margin sanity check (reference)
 Conservative large run envelope (60 chunks per run, 512 MB / 30 s):
 - Compute: `0.0041667 CU × $0.30/CU` = `$0.00125`
-- Dataset write cost: `$0.000005`
-- Total platform cost: `~$0.001255`
+- Dataset write cost: `60 items × $0.000005` = `$0.0003`
+- Total platform cost: `~$0.00155`
 
 Revenue at FREE-tier pricing (`$0.0008` per chunk):
 - Revenue: `60 × $0.0008` = `$0.048`
 - Creator share: `0.8 × $0.048` = `$0.0384`
-- Estimated net margin: `$0.0384 - $0.001255` ≈ `$0.0371` per run
+- Estimated net margin: `$0.0384 - $0.00155` ≈ `$0.0369` per run
 
 Break-even chunk count per run:
-- Required revenue to cover platform cost: `$0.001255 / 0.8` = `$0.00157`
-- Required chunks: `$0.00157 / $0.0008` ≈ `2 chunks` per run
+- Required revenue to cover platform cost: `$0.00155 / 0.8` = `$0.0019`
+- Required chunks: `$0.0019 / $0.0008` ≈ `3 chunks` per run
 
-Even a 1-page document producing 2 chunks is profitable.
+Small runs (1–2 chunks on 256 MB) cost ~$0.0004 in compute, so even tiny documents are
+roughly break-even, and everything above ~3 chunks is profitable. Per-chunk revenue
+scales with document size, so the worst case for margin is now the smallest runs, not
+the largest.
 
 ## Rollout checklist
 1. Publish the synthetic event prices above in Apify admin UI.

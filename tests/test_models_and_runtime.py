@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from pydantic import ValidationError
 
-from src.models import MarkdownChunk, MarkdownSplitterInput, MarkdownSplitterOutput, ProcessingMetrics
+from src.models import MarkdownChunk, MarkdownSplitterInput, ProcessingMetrics
 from src.processing import convert_to_markdown, format_chunks, resolve_markdown_text
 
 
@@ -148,6 +148,66 @@ class InputModelStripHeadersTests(unittest.TestCase):
         self.assertFalse(obj.strip_headers)
 
 
+class InputModelProxyTests(unittest.TestCase):
+    """Tests for proxy selection in file mode."""
+
+    def test_use_apify_proxy_defaults_false(self) -> None:
+        obj = MarkdownSplitterInput(markdown_text="# H")
+        self.assertFalse(obj.use_apify_proxy)
+
+    def test_proxy_url_defaults_none(self) -> None:
+        obj = MarkdownSplitterInput(markdown_text="# H")
+        self.assertIsNone(obj.proxy_url)
+
+    def test_proxy_url_accepts_http(self) -> None:
+        obj = MarkdownSplitterInput(
+            input_mode="file",
+            markdown_file="https://example.com/doc.pdf",
+            proxy_url="http://proxy.example.com:8080",
+        )
+        self.assertEqual(obj.proxy_url, "http://proxy.example.com:8080")
+
+    def test_proxy_url_accepts_https_and_socks5(self) -> None:
+        for url in ("https://user:pass@proxy.example.com:8080", "socks5://127.0.0.1:1080"):
+            obj = MarkdownSplitterInput(
+                input_mode="file", markdown_file="https://example.com/doc.pdf", proxy_url=url
+            )
+            self.assertEqual(obj.proxy_url, url)
+
+    def test_proxy_url_rejects_unsupported_scheme(self) -> None:
+        with self.assertRaises(ValidationError):
+            MarkdownSplitterInput(
+                input_mode="file",
+                markdown_file="https://example.com/doc.pdf",
+                proxy_url="ftp://proxy.example.com:21",
+            )
+
+    def test_proxy_url_rejects_garbage(self) -> None:
+        with self.assertRaises(ValidationError):
+            MarkdownSplitterInput(
+                input_mode="file",
+                markdown_file="https://example.com/doc.pdf",
+                proxy_url="not a url",
+            )
+
+    def test_both_proxy_sources_rejected(self) -> None:
+        with self.assertRaises(ValidationError):
+            MarkdownSplitterInput(
+                input_mode="file",
+                markdown_file="https://example.com/doc.pdf",
+                use_apify_proxy=True,
+                proxy_url="http://proxy.example.com:8080",
+            )
+
+    def test_apify_proxy_alone_is_valid(self) -> None:
+        obj = MarkdownSplitterInput(
+            input_mode="file",
+            markdown_file="https://example.com/doc.pdf",
+            use_apify_proxy=True,
+        )
+        self.assertTrue(obj.use_apify_proxy)
+
+
 # ---------------------------------------------------------------------------
 # MarkdownChunk model
 # ---------------------------------------------------------------------------
@@ -230,32 +290,6 @@ class ProcessingMetricsTests(unittest.TestCase):
                 chunk_count=0,
                 elapsed_ms=-1,
             )
-
-
-# ---------------------------------------------------------------------------
-# MarkdownSplitterOutput model
-# ---------------------------------------------------------------------------
-
-
-class MarkdownSplitterOutputTests(unittest.TestCase):
-    def _chunk(self) -> MarkdownChunk:
-        return MarkdownChunk(
-            content="text", metadata={}, chunk_id="abc", char_count=4, token_count=1
-        )
-
-    def test_valid_output_no_error(self) -> None:
-        out = MarkdownSplitterOutput(chunks=[self._chunk()], metrics=None, error=None)
-        self.assertIsNone(out.error)
-
-    def test_valid_output_with_error(self) -> None:
-        out = MarkdownSplitterOutput(chunks=[], metrics=None, error="something went wrong")
-        self.assertEqual(out.error, "something went wrong")
-
-    def test_model_dump_excludes_none(self) -> None:
-        out = MarkdownSplitterOutput(chunks=[], metrics=None, error=None)
-        dumped = out.model_dump(exclude_none=True)
-        self.assertNotIn("error", dumped)
-        self.assertNotIn("metrics", dumped)
 
 
 # ---------------------------------------------------------------------------

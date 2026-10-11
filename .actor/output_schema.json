@@ -1,13 +1,19 @@
 {
   "actorOutputSchemaVersion": 1,
   "title": "Markdown RAG Chunker outputs",
-  "description": "Structured links to run outputs for API clients and AI agents.",
+  "description": "Links for API clients and AI agents: the RAG chunks dataset and the run metrics record.",
   "properties": {
-    "results": {
+    "ragChunks": {
       "type": "string",
       "title": "RAG Chunk Results",
-      "description": "Dataset items containing a chunks array (content, metadata, chunk_id, char_count, token_count) and run metrics (input_mode, input_chars, chunk_count, elapsed_ms).",
+      "description": "Dataset items containing one RAG-ready chunk each (content, metadata, chunk_id, char_count, token_count).",
       "template": "{{links.apiDefaultDatasetUrl}}/items"
+    },
+    "runMetrics": {
+      "type": "string",
+      "title": "Run Metrics",
+      "description": "Run summary (input_mode, input_file_type, input_chars, chunk_count, elapsed_ms) stored as the OUTPUT record.",
+      "template": "{{links.apiDefaultKeyValueStoreUrl}}/records/OUTPUT"
     }
   }
 }

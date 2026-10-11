@@ -1,6 +1,16 @@
+"""Pydantic models defining the Actor's input contract and output records.
+
+All validation lives here so that invalid input fails fast — before any
+compute is spent — which keeps runs cheap and error messages actionable.
+"""
+
+import re
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
+
+#: Proxy URL schemes accepted for user-supplied proxies in ``proxy_url``.
+_PROXY_SCHEMES = ("http://", "https://", "socks5://")
 
 
 class MarkdownSplitterInput(BaseModel):
@@ -13,8 +23,8 @@ class MarkdownSplitterInput(BaseModel):
     markdown_file: Optional[str] = Field(
         None,
         description=(
-            "Source in file mode. Supported: HTTPS URL for markdown, HTML, PDF, Word, "
-            "Excel, PowerPoint, CSV, JSON, XML, EPUB, and more; or kvs://KEY."
+            "Source in file mode. Supported: HTTP(S) URL for markdown, HTML, PDF, "
+            "Word, Excel, PowerPoint, CSV, JSON, XML, EPUB, and more; or kvs://KEY."
         ),
     )
     max_input_chars: int = Field(
@@ -34,6 +44,21 @@ class MarkdownSplitterInput(BaseModel):
         description="Header levels to split on (e.g., ['#', '##'])",
     )
     strip_headers: bool = Field(True, description="Remove headers from chunks")
+    use_apify_proxy: bool = Field(
+        False,
+        description=(
+            "Route the remote fetch through Apify Proxy (datacenter, auto group). "
+            "Billed by Apify as standard platform usage; off by default."
+        ),
+    )
+    proxy_url: Optional[str] = Field(
+        None,
+        description=(
+            "Bring your own proxy for the remote fetch, e.g. "
+            "http://user:pass@host:8080 or socks5://host:1080. Free: no Apify "
+            "proxy charges. Mutually exclusive with use_apify_proxy."
+        ),
+    )
 
     @field_validator("headers_to_split_on")
     @classmethod
@@ -49,8 +74,27 @@ class MarkdownSplitterInput(BaseModel):
                 raise ValueError(f"Invalid header format: {h}. Use '#', '##', etc.")
         return v
 
+    @field_validator("proxy_url")
+    @classmethod
+    def validate_proxy_url(cls, v: Optional[str]) -> Optional[str]:
+        if v is None:
+            return v
+        stripped = v.strip()
+        if not stripped.startswith(_PROXY_SCHEMES) or not re.match(
+            r"^[a-z0-9]+://[\w.\-:@\[\]]+", stripped
+        ):
+            raise ValueError(
+                f"Invalid proxy_url: {v}. Use http://, https:// or socks5:// "
+                "with a host, e.g. http://user:pass@host:8080."
+            )
+        return stripped
+
     @model_validator(mode="after")
     def validate_input_source(self) -> "MarkdownSplitterInput":
+        if self.use_apify_proxy and self.proxy_url is not None:
+            raise ValueError(
+                "Set either use_apify_proxy or proxy_url, not both."
+            )
         if self.input_mode == "text":
             if self.markdown_text is None or not self.markdown_text.strip():
                 raise ValueError("markdown_text is required when input_mode is 'text'.")
@@ -77,6 +121,8 @@ class MarkdownChunk(BaseModel):
 
 
 class ProcessingMetrics(BaseModel):
+    """Run summary returned as the Actor's named output (not billed)."""
+
     input_mode: Literal["text", "file"] = Field(..., description="Input mode used")
     input_file_type: str = Field(
         "text/markdown",
@@ -85,13 +131,3 @@ class ProcessingMetrics(BaseModel):
     input_chars: int = Field(..., ge=0, description="Input size in characters")
     chunk_count: int = Field(..., ge=0, description="Produced chunk count")
     elapsed_ms: int = Field(..., ge=0, description="Processing time in milliseconds")
-
-
-class MarkdownSplitterOutput(BaseModel):
-    chunks: list[MarkdownChunk] = Field(
-        ..., description="Processed chunks with metadata and chunk metrics"
-    )
-    metrics: Optional[ProcessingMetrics] = Field(
-        None, description="Run-level processing telemetry for transparency"
-    )
-    error: Optional[str] = Field(None, description="Error details")

@@ -21,7 +21,7 @@
     "markdown_file": {
       "title": "Markdown File Source",
       "type": "string",
-      "description": "When input_mode is file, provide an HTTPS URL to Markdown, HTML, PDF, Word, Excel, PowerPoint, CSV, JSON, XML, EPUB, and more. You can also provide an Apify Key-Value Store record like kvs://MARKDOWN_INPUT.",
+      "description": "When input_mode is file, provide an HTTP(S) URL to Markdown, HTML, PDF, Word, Excel, PowerPoint, CSV, JSON, XML, EPUB, and more. You can also provide an Apify Key-Value Store record like kvs://MARKDOWN_INPUT.",
       "editor": "textfield",
       "default": "https://en.wikipedia.org/wiki/Giant_panda",
       "prefill": "https://en.wikipedia.org/wiki/Giant_panda"
@@ -61,6 +61,19 @@
       "default": 5000,
       "minimum": 1,
       "maximum": 50000
+    },
+    "use_apify_proxy": {
+      "title": "Use Apify Proxy",
+      "type": "boolean",
+      "description": "Route the remote file fetch through Apify Proxy (datacenter). Useful when a site blocks datacenter IPs or rate-limits you. Billed by Apify as standard platform usage. Leave off for direct downloads. Only applies in file mode.",
+      "default": false
+    },
+    "proxy_url": {
+      "title": "Custom Proxy URL (free)",
+      "type": "string",
+      "description": "Bring your own proxy for the file fetch: http://user:pass@host:8080, https://host:8080, or socks5://host:1080. Free of charge — no Apify proxy fees. Mutually exclusive with Use Apify Proxy. Only applies in file mode.",
+      "editor": "textfield",
+      "prefill": "http://user:pass@proxy.example.com:8080"
     }
   }
 }

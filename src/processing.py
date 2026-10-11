@@ -1,3 +1,10 @@
+"""Pure chunking logic, independent of the Apify runtime.
+
+All external effects (HTTP fetches, key-value store reads, format
+conversion) are injected as callables, so every function here is
+unit-testable without mocks or network access.
+"""
+
 import hashlib
 import io
 import inspect
@@ -9,6 +16,13 @@ from .models import MarkdownChunk, MarkdownSplitterInput
 
 
 def format_chunks(documents: list[Any]) -> list[MarkdownChunk]:
+    """Convert LangChain documents into ``MarkdownChunk`` output records.
+
+    Each chunk gets a deterministic ``chunk_id`` — the first 16 hex
+    characters of the SHA-256 over the sorted-key JSON of its content and
+    metadata — so re-running the same input yields the same IDs and
+    downstream upserts stay idempotent.
+    """
     chunks: list[MarkdownChunk] = []
     for doc in documents:
         content = doc.page_content or ""
@@ -34,6 +48,10 @@ def format_chunks(documents: list[Any]) -> list[MarkdownChunk]:
 
 
 async def _maybe_await(value: Any) -> Any:
+    """Await ``value`` if it is awaitable, otherwise return it unchanged.
+
+    Lets callers inject either sync or async callables for I/O.
+    """
     if inspect.isawaitable(value):
         return await value
     return value
@@ -45,6 +63,14 @@ async def resolve_markdown_text(
     load_kvs: Callable[[str], Awaitable[str] | str],
     convert_remote_file: Callable[[bytes, str], str] | None = None,
 ) -> tuple[str, str]:
+    """Resolve raw input into ``(markdown_text, input_file_type)``.
+
+    Text mode returns the input as-is. File mode accepts an ``http(s)://``
+    URL (fetched and converted to Markdown from the response MIME type) or
+    a ``kvs://KEY`` record (plain string, passed through unconverted).
+    Raises ``ValueError`` on unsupported schemes, empty results, or inputs
+    over ``max_input_chars``.
+    """
     converter = convert_remote_file or convert_to_markdown
     if params.input_mode == "text":
         if params.markdown_text is None:
@@ -77,7 +103,7 @@ async def resolve_markdown_text(
         markdown_text = await _maybe_await(load_kvs(key))
     else:
         raise ValueError(
-            "Unsupported markdown_file source. Use https://... or kvs://KEY."
+            "Unsupported markdown_file source. Use http(s)://... or kvs://KEY."
         )
 
     if not isinstance(markdown_text, str):
