@@ -1,13 +1,22 @@
 """Comprehensive tests for models and processing helpers."""
 
+import json
 import unittest
+from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
 
 from pydantic import ValidationError
 
 from src.models import MarkdownChunk, MarkdownSplitterInput, ProcessingMetrics
-from src.processing import convert_to_markdown, format_chunks, resolve_markdown_text
+from src.processing import (
+    convert_to_markdown,
+    document_hash,
+    format_chunks,
+    resolve_markdown_text,
+    split_config_fingerprint,
+    split_documents,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -103,6 +112,22 @@ class InputModelFieldBoundsTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             MarkdownSplitterInput(markdown_text="# H", max_input_chars=5_000_001)
 
+    def test_max_input_chars_accepts_ceiling(self) -> None:
+        obj = MarkdownSplitterInput(markdown_text="# H", max_input_chars=5_000_000)
+        self.assertEqual(obj.max_input_chars, 5_000_000)
+
+    def test_max_chunks_accepts_max_boundary(self) -> None:
+        obj = MarkdownSplitterInput(markdown_text="# H", max_chunks=50_000)
+        self.assertEqual(obj.max_chunks, 50_000)
+
+    def test_max_chunks_rejects_above_max(self) -> None:
+        with self.assertRaises(ValidationError):
+            MarkdownSplitterInput(markdown_text="# H", max_chunks=50_001)
+
+    def test_invalid_input_mode_rejected(self) -> None:
+        with self.assertRaises(ValidationError):
+            MarkdownSplitterInput(input_mode="telepathy", markdown_text="# H")  # type: ignore[arg-type]
+
 
 class InputModelHeaderValidatorTests(unittest.TestCase):
     """Tests for headers_to_split_on validation."""
@@ -136,6 +161,24 @@ class InputModelHeaderValidatorTests(unittest.TestCase):
     def test_default_headers(self) -> None:
         obj = MarkdownSplitterInput(markdown_text="# H")
         self.assertEqual(obj.headers_to_split_on, ["#", "##", "###", "####", "#####", "######"])
+
+    def test_headers_are_normalised(self) -> None:
+        obj = MarkdownSplitterInput(
+            markdown_text="# H", headers_to_split_on=["  ##  ", " # "]
+        )
+        self.assertEqual(obj.headers_to_split_on, ["##", "#"])
+
+    def test_rejects_seven_hashes(self) -> None:
+        # '#######' is not a Markdown header; accepting it would silently
+        # never match anything in the splitter.
+        with self.assertRaises(ValidationError):
+            MarkdownSplitterInput(markdown_text="# H", headers_to_split_on=["#######"])
+
+    def test_empty_header_list_allowed(self) -> None:
+        # Pins intent: [] means "no header splitting" — the whole document
+        # stays one chunk (max_chunk_chars still applies).
+        obj = MarkdownSplitterInput(markdown_text="# H", headers_to_split_on=[])
+        self.assertEqual(obj.headers_to_split_on, [])
 
 
 class InputModelStripHeadersTests(unittest.TestCase):
@@ -207,6 +250,49 @@ class InputModelProxyTests(unittest.TestCase):
         )
         self.assertTrue(obj.use_apify_proxy)
 
+    def test_proxy_url_normalises_uppercase_scheme(self) -> None:
+        # URL schemes are case-insensitive (RFC 3986); only the scheme is
+        # lowercased so userinfo and hosts keep their case.
+        obj = MarkdownSplitterInput(
+            input_mode="file",
+            markdown_file="https://example.com/doc.pdf",
+            proxy_url="HTTP://proxy.example.com:8080",
+        )
+        self.assertEqual(obj.proxy_url, "http://proxy.example.com:8080")
+
+    def test_proxy_url_returned_stripped(self) -> None:
+        obj = MarkdownSplitterInput(
+            input_mode="file",
+            markdown_file="https://example.com/doc.pdf",
+            proxy_url="  http://proxy.example.com:8080  ",
+        )
+        self.assertEqual(obj.proxy_url, "http://proxy.example.com:8080")
+
+    def test_proxy_url_accepted_in_text_mode(self) -> None:
+        # Pin: proxy settings only affect file-mode fetches; text mode
+        # accepts them without error (there is nothing to fetch).
+        obj = MarkdownSplitterInput(
+            markdown_text="# H", proxy_url="http://proxy.example.com:8080"
+        )
+        self.assertEqual(obj.proxy_url, "http://proxy.example.com:8080")
+
+    def test_both_proxy_sources_error_names_the_fields(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "use_apify_proxy or proxy_url"):
+            MarkdownSplitterInput(
+                input_mode="file",
+                markdown_file="https://example.com/doc.pdf",
+                use_apify_proxy=True,
+                proxy_url="http://proxy.example.com:8080",
+            )
+
+    def test_text_mode_required_error_is_actionable(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "markdown_text is required"):
+            MarkdownSplitterInput(input_mode="text", markdown_text=None)
+
+    def test_file_mode_required_error_is_actionable(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "markdown_file is required"):
+            MarkdownSplitterInput(input_mode="file", markdown_file=None)
+
 
 # ---------------------------------------------------------------------------
 # MarkdownChunk model
@@ -251,6 +337,7 @@ class ProcessingMetricsTests(unittest.TestCase):
             input_chars=100,
             chunk_count=5,
             elapsed_ms=42,
+            document_hash="abc123",
         )
         self.assertEqual(m.input_mode, "text")
         self.assertEqual(m.input_file_type, "text/markdown")
@@ -261,6 +348,7 @@ class ProcessingMetricsTests(unittest.TestCase):
             input_chars=0,
             chunk_count=0,
             elapsed_ms=0,
+            document_hash="a",
         )
         self.assertEqual(m.input_file_type, "text/markdown")
 
@@ -289,7 +377,102 @@ class ProcessingMetricsTests(unittest.TestCase):
                 input_chars=0,
                 chunk_count=0,
                 elapsed_ms=-1,
+                document_hash="a",
             )
+
+    def test_document_hash_required(self) -> None:
+        with self.assertRaises(ValidationError):
+            ProcessingMetrics(
+                input_mode="text",
+                input_chars=0,
+                chunk_count=0,
+                elapsed_ms=0,
+            )
+
+    def test_unchanged_defaults_false_and_cached_chunk_count_optional(self) -> None:
+        m = ProcessingMetrics(
+            input_mode="text",
+            input_chars=0,
+            chunk_count=0,
+            elapsed_ms=0,
+            document_hash="a",
+        )
+        self.assertFalse(m.unchanged)
+        self.assertIsNone(m.cached_chunk_count)
+
+
+class InputModelSkipUnchangedTests(unittest.TestCase):
+    def test_skip_if_unchanged_defaults_false(self) -> None:
+        obj = MarkdownSplitterInput(markdown_text="# H")
+        self.assertFalse(obj.skip_if_unchanged)
+
+
+class DocumentHashTests(unittest.TestCase):
+    def test_same_text_same_hash(self) -> None:
+        self.assertEqual(document_hash("# Hello"), document_hash("# Hello"))
+
+    def test_different_text_different_hash(self) -> None:
+        self.assertNotEqual(document_hash("# Hello"), document_hash("# World"))
+
+    def test_hash_is_16_hex_chars(self) -> None:
+        h = document_hash("text")
+        self.assertEqual(len(h), 16)
+        int(h, 16)  # must be valid hex
+
+    def test_empty_text_allowed(self) -> None:
+        self.assertEqual(len(document_hash("")), 16)
+
+
+class SplitConfigFingerprintTests(unittest.TestCase):
+    def _params(self, **kw) -> MarkdownSplitterInput:
+        base = dict(markdown_text="# H")
+        base.update(kw)
+        return MarkdownSplitterInput(**base)
+
+    def test_same_config_same_fingerprint(self) -> None:
+        self.assertEqual(
+            split_config_fingerprint(self._params()),
+            split_config_fingerprint(self._params()),
+        )
+
+    def test_headers_change_fingerprint(self) -> None:
+        self.assertNotEqual(
+            split_config_fingerprint(self._params()),
+            split_config_fingerprint(self._params(headers_to_split_on=["#"])),
+        )
+
+    def test_max_chunk_chars_change_fingerprint(self) -> None:
+        self.assertNotEqual(
+            split_config_fingerprint(self._params()),
+            split_config_fingerprint(self._params(max_chunk_chars=1800)),
+        )
+
+    def test_strip_headers_change_fingerprint(self) -> None:
+        self.assertNotEqual(
+            split_config_fingerprint(self._params()),
+            split_config_fingerprint(self._params(strip_headers=False)),
+        )
+
+    def test_input_text_does_not_change_fingerprint(self) -> None:
+        self.assertEqual(
+            split_config_fingerprint(self._params(markdown_text="# A")),
+            split_config_fingerprint(self._params(markdown_text="# B")),
+        )
+
+    def test_limits_and_flags_do_not_change_fingerprint(self) -> None:
+        # max_chunks, max_input_chars and proxy/skip flags do not affect
+        # splitting, so changing them must not invalidate the cache.
+        self.assertEqual(
+            split_config_fingerprint(self._params()),
+            split_config_fingerprint(
+                self._params(
+                    max_chunks=99,
+                    max_input_chars=42,
+                    skip_if_unchanged=True,
+                    use_apify_proxy=True,
+                )
+            ),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +509,20 @@ class FormatChunksTests(unittest.TestCase):
         chunks = format_chunks([self._Doc("hello", {})])
         self.assertIsInstance(chunks[0].chunk_id, str)
         self.assertTrue(len(chunks[0].chunk_id) > 0)
+
+    def test_chunk_id_is_16_lowercase_hex_chars(self) -> None:
+        chunks = format_chunks([self._Doc("hello", {"Header 1": "World"})])
+        self.assertRegex(chunks[0].chunk_id, r"^[0-9a-f]{16}$")
+
+    def test_chunk_id_independent_of_metadata_key_order(self) -> None:
+        a = format_chunks([self._Doc("same", {"Header 1": "A", "Header 2": "B"})])[0].chunk_id
+        b = format_chunks([self._Doc("same", {"Header 2": "B", "Header 1": "A"})])[0].chunk_id
+        self.assertEqual(a, b)
+
+    def test_chunk_id_deterministic_for_unicode_content(self) -> None:
+        a = format_chunks([self._Doc("héllo ☃ слайд", {})])[0].chunk_id
+        b = format_chunks([self._Doc("héllo ☃ слайд", {})])[0].chunk_id
+        self.assertEqual(a, b)
 
     def test_chunk_id_is_deterministic(self) -> None:
         doc = self._Doc("hello", {"Header 1": "World"})
@@ -545,6 +742,216 @@ class ResolveMarkdownTextTests(unittest.IsolatedAsyncioTestCase):
             load_kvs=async_load,
         )
         self.assertEqual(text, "# async kvs")
+
+    async def test_fetch_remote_non_tuple_raises(self) -> None:
+        params = MarkdownSplitterInput(
+            input_mode="file", markdown_file="https://example.com/doc.md"
+        )
+        with self.assertRaisesRegex(ValueError, "tuple"):
+            await resolve_markdown_text(
+                params=params,
+                fetch_remote=lambda _: b"raw bytes only",  # type: ignore[return-value]
+                load_kvs=lambda _: "",
+            )
+
+    async def test_fetch_remote_wrong_arity_raises(self) -> None:
+        params = MarkdownSplitterInput(
+            input_mode="file", markdown_file="https://example.com/doc.md"
+        )
+        with self.assertRaisesRegex(ValueError, "tuple"):
+            await resolve_markdown_text(
+                params=params,
+                fetch_remote=lambda _: (b"x", "text/plain", "extra"),  # type: ignore[return-value]
+                load_kvs=lambda _: "",
+            )
+
+    async def test_fetch_remote_non_bytes_payload_raises(self) -> None:
+        params = MarkdownSplitterInput(
+            input_mode="file", markdown_file="https://example.com/doc.md"
+        )
+        with self.assertRaisesRegex(ValueError, "bytes"):
+            await resolve_markdown_text(
+                params=params,
+                fetch_remote=lambda _: ("a string", "text/plain"),  # type: ignore[return-value]
+                load_kvs=lambda _: "",
+            )
+
+    async def test_fetch_remote_non_string_content_type_raises(self) -> None:
+        params = MarkdownSplitterInput(
+            input_mode="file", markdown_file="https://example.com/doc.md"
+        )
+        with self.assertRaisesRegex(ValueError, "content type"):
+            await resolve_markdown_text(
+                params=params,
+                fetch_remote=lambda _: (b"x", 123),  # type: ignore[return-value]
+                load_kvs=lambda _: "",
+            )
+
+    async def test_load_kvs_non_string_result_raises(self) -> None:
+        params = MarkdownSplitterInput(
+            input_mode="file", markdown_file="kvs://MY_KEY"
+        )
+        with self.assertRaisesRegex(ValueError, "UTF-8 string"):
+            await resolve_markdown_text(
+                params=params,
+                fetch_remote=lambda _: (b"", ""),
+                load_kvs=lambda _: 42,  # type: ignore[return-value]
+            )
+
+    async def test_converted_content_exactly_at_max_input_chars_passes(self) -> None:
+        params = MarkdownSplitterInput(
+            input_mode="file",
+            markdown_file="https://example.com/doc.md",
+            max_input_chars=9,
+        )
+        text, _ = await resolve_markdown_text(
+            params=params,
+            fetch_remote=lambda _: (b"data", "text/markdown"),
+            load_kvs=lambda _: "",
+            convert_remote_file=lambda _raw, _ct: "# content",  # exactly 9 chars
+        )
+        self.assertEqual(text, "# content")
+
+    async def test_file_mode_strips_surrounding_whitespace_from_source(self) -> None:
+        received_urls: list[str] = []
+        params = MarkdownSplitterInput(
+            input_mode="file", markdown_file="  https://example.com/a.md  "
+        )
+        await resolve_markdown_text(
+            params=params,
+            fetch_remote=lambda url: received_urls.append(url) or (b"# x", "text/markdown"),  # type: ignore[func-returns-value]
+            load_kvs=lambda _: "",
+        )
+        self.assertEqual(received_urls, ["https://example.com/a.md"])
+
+
+# ---------------------------------------------------------------------------
+# split_documents
+# ---------------------------------------------------------------------------
+
+
+class SplitDocumentsTests(unittest.TestCase):
+    """Splitting behaviour, exercised through the real LangChain splitters.
+
+    These tests pin the runtime contract: header→metadata mapping, the
+    second pass that only re-splits oversized sections, empty-section
+    filtering (zero-char chunks would be billed), and max_chunks limits.
+    """
+
+    def _params(self, **kw) -> MarkdownSplitterInput:
+        base: dict = dict(markdown_text="# placeholder")
+        base.update(kw)
+        return MarkdownSplitterInput(**base)
+
+    def test_splits_on_headers_and_keeps_header_chain(self) -> None:
+        text = "# Guide\nintro\n## Install\nrun pip\n### Windows\nuse cmd"
+        docs = split_documents(
+            self._params(headers_to_split_on=["#", "##", "###"]), text
+        )
+        metas = [d.metadata for d in docs]
+        self.assertIn({"Header 1": "Guide"}, metas)
+        self.assertIn({"Header 1": "Guide", "Header 2": "Install"}, metas)
+        self.assertIn(
+            {"Header 1": "Guide", "Header 2": "Install", "Header 3": "Windows"}, metas
+        )
+
+    def test_sections_under_cap_pass_through_untouched(self) -> None:
+        text = "# Short\nabc"
+        docs = split_documents(
+            self._params(headers_to_split_on=["#"], max_chunk_chars=100), text
+        )
+        self.assertEqual(len(docs), 1)
+        self.assertEqual(docs[0].page_content, "abc")
+
+    def test_only_oversized_sections_are_resplit(self) -> None:
+        long_body = "word " * 80  # 400 chars
+        text = f"# Short\nabc\n\n# Long\n{long_body}"
+        docs = split_documents(
+            self._params(headers_to_split_on=["#"], max_chunk_chars=200), text
+        )
+        short = [d for d in docs if d.metadata.get("Header 1") == "Short"]
+        long_ = [d for d in docs if d.metadata.get("Header 1") == "Long"]
+        self.assertEqual(len(short), 1)
+        self.assertEqual(short[0].page_content, "abc")
+        self.assertGreater(len(long_), 1)
+        self.assertTrue(all(len(d.page_content) <= 200 for d in long_))
+
+    def test_empty_sections_are_dropped(self) -> None:
+        # A header with no body would otherwise become a billed zero-char chunk.
+        text = "# Empty\n\n# Full\nreal content"
+        docs = split_documents(self._params(headers_to_split_on=["#"]), text)
+        contents = [d.page_content for d in docs]
+        self.assertNotIn("", contents)
+        self.assertEqual(contents, ["real content"])
+
+    def test_no_headers_returns_whole_document(self) -> None:
+        text = "# looks like a header\nbut no splitting requested\n\nmore"
+        docs = split_documents(self._params(headers_to_split_on=[]), text)
+        self.assertEqual(len(docs), 1)
+        # The splitter may normalise trailing whitespace, so compare loosely.
+        self.assertEqual(docs[0].page_content.split(), text.split())
+
+    def test_strip_headers_false_keeps_headers_in_content(self) -> None:
+        text = "# Title\nbody"
+        docs = split_documents(
+            self._params(headers_to_split_on=["#"], strip_headers=False), text
+        )
+        self.assertIn("# Title", docs[0].page_content)
+
+    def test_chunk_count_equal_to_max_chunks_passes(self) -> None:
+        text = "# A\none\n\n# B\ntwo"
+        docs = split_documents(
+            self._params(headers_to_split_on=["#"], max_chunks=2), text
+        )
+        self.assertEqual(len(docs), 2)
+
+    def test_chunk_count_exceeding_max_chunks_raises(self) -> None:
+        text = "# A\none\n\n# B\ntwo"
+        with self.assertRaisesRegex(ValueError, "max_chunks"):
+            split_documents(self._params(headers_to_split_on=["#"], max_chunks=1), text)
+
+
+# ---------------------------------------------------------------------------
+# Schema ↔ model congruence
+# ---------------------------------------------------------------------------
+
+
+class SchemaCongruenceTests(unittest.TestCase):
+    """Pin the deliberate contract between INPUT_SCHEMA.json and the model.
+
+    The input_mode default intentionally diverges (schema: ``file`` for the
+    Console form, model: ``text`` for API callers); everything else must
+    stay in sync so the form and the validator never disagree.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        path = Path(__file__).resolve().parent.parent / ".actor" / "INPUT_SCHEMA.json"
+        cls.schema = json.loads(path.read_text())
+
+    def test_input_mode_default_diverges_deliberately(self) -> None:
+        self.assertEqual(self.schema["properties"]["input_mode"]["default"], "file")
+        self.assertEqual(
+            MarkdownSplitterInput(markdown_text="# H").input_mode, "text"
+        )
+
+    def test_numeric_limits_match_model(self) -> None:
+        props = self.schema["properties"]
+        cases = {
+            "max_input_chars": {"default": 500_000, "minimum": 1, "maximum": 5_000_000},
+            "max_chunks": {"default": 5_000, "minimum": 1, "maximum": 50_000},
+            "max_chunk_chars": {"minimum": 1, "maximum": 100_000},
+        }
+        for field, expected in cases.items():
+            for key, value in expected.items():
+                self.assertEqual(
+                    props[field].get(key), value, f"{field}.{key} drifted from the model"
+                )
+
+    def test_every_model_field_is_represented(self) -> None:
+        schema_fields = set(self.schema["properties"])
+        model_fields = set(MarkdownSplitterInput.model_fields)
+        self.assertEqual(schema_fields, model_fields)
 
 
 # ---------------------------------------------------------------------------

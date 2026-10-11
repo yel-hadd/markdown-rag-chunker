@@ -10,7 +10,7 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 #: Proxy URL schemes accepted for user-supplied proxies in ``proxy_url``.
-_PROXY_SCHEMES = ("http://", "https://", "socks5://")
+_PROXY_SCHEMES = ("http", "https", "socks5")
 
 
 class MarkdownSplitterInput(BaseModel):
@@ -44,6 +44,16 @@ class MarkdownSplitterInput(BaseModel):
         description="Header levels to split on (e.g., ['#', '##'])",
     )
     strip_headers: bool = Field(True, description="Remove headers from chunks")
+    skip_if_unchanged: bool = Field(
+        False,
+        description=(
+            "Skip re-chunking when the source document and split settings are "
+            "unchanged since the last run: nothing is pushed to the dataset and "
+            "the run costs a fraction of a cent. The Output reports "
+            "unchanged=true with the cached chunk count. First runs always "
+            "process."
+        ),
+    )
     use_apify_proxy: bool = Field(
         False,
         description=(
@@ -65,14 +75,14 @@ class MarkdownSplitterInput(BaseModel):
     def validate_headers(cls, v: list[str]) -> list[str]:
         if len(v) > 6:
             raise ValueError("You can provide at most 6 header levels.")
-        for h in v:
-            stripped = h.strip()
-            if (
-                not stripped.startswith("#")
-                or not stripped.replace("#", "").strip() == ""
-            ):
-                raise ValueError(f"Invalid header format: {h}. Use '#', '##', etc.")
-        return v
+        # Markdown headers are 1–6 '#' characters; anything else would never
+        # match in the splitter. Entries are normalised (stripped) so that
+        # ' ## ' and '##' fingerprint identically for change detection.
+        normalised = [h.strip() for h in v]
+        for raw, h in zip(v, normalised):
+            if not re.fullmatch(r"#{1,6}", h):
+                raise ValueError(f"Invalid header format: {raw}. Use '#', '##', etc.")
+        return normalised
 
     @field_validator("proxy_url")
     @classmethod
@@ -80,14 +90,19 @@ class MarkdownSplitterInput(BaseModel):
         if v is None:
             return v
         stripped = v.strip()
-        if not stripped.startswith(_PROXY_SCHEMES) or not re.match(
-            r"^[a-z0-9]+://[\w.\-:@\[\]]+", stripped
+        scheme, has_sep, rest = stripped.partition("://")
+        if (
+            not has_sep
+            or scheme.lower() not in _PROXY_SCHEMES
+            or not re.match(r"^[\w.\-:@\[\]]+", rest)
         ):
             raise ValueError(
                 f"Invalid proxy_url: {v}. Use http://, https:// or socks5:// "
                 "with a host, e.g. http://user:pass@host:8080."
             )
-        return stripped
+        # Schemes are case-insensitive (RFC 3986); only the scheme is
+        # lowercased so userinfo, host and path keep their original case.
+        return f"{scheme.lower()}://{rest}"
 
     @model_validator(mode="after")
     def validate_input_source(self) -> "MarkdownSplitterInput":
@@ -121,7 +136,7 @@ class MarkdownChunk(BaseModel):
 
 
 class ProcessingMetrics(BaseModel):
-    """Run summary returned as the Actor's named output (not billed)."""
+    """Run summary written to the OUTPUT record (never billed)."""
 
     input_mode: Literal["text", "file"] = Field(..., description="Input mode used")
     input_file_type: str = Field(
@@ -129,5 +144,24 @@ class ProcessingMetrics(BaseModel):
         description="Detected file MIME type or text/markdown for direct input.",
     )
     input_chars: int = Field(..., ge=0, description="Input size in characters")
-    chunk_count: int = Field(..., ge=0, description="Produced chunk count")
+    chunk_count: int = Field(..., ge=0, description="Chunks pushed in this run")
     elapsed_ms: int = Field(..., ge=0, description="Processing time in milliseconds")
+    document_hash: str = Field(
+        ...,
+        description=(
+            "Fingerprint of the resolved document (pre-splitting). Compare "
+            "between runs to detect content changes client-side."
+        ),
+    )
+    unchanged: bool = Field(
+        False,
+        description=(
+            "True when skip_if_unchanged detected no change since the last "
+            "run; no chunks were pushed and none were billed."
+        ),
+    )
+    cached_chunk_count: Optional[int] = Field(
+        None,
+        ge=0,
+        description="Chunk count from the previous run, present when unchanged=true.",
+    )

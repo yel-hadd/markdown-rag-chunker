@@ -29,6 +29,26 @@ Equivalent to **$0.80 per 1,000 chunks** at the FREE/BRONZE tier — competitive
 > platform usage on their plan, exactly like any other Actor's proxy traffic. Neither
 > option creates creator-side cost, so neither needs an event price.
 
+## Change-detection cache economics (v1.2)
+
+`skip_if_unchanged` keeps one tiny record (`document_hash`, split-config fingerprint,
+`chunk_count`) in a named key-value store created inside the run — the store belongs to
+the **run's user**, so cache storage never costs the creator anything.
+
+Skip runs (cache hit) still fetch and convert the document (the hash is computed after
+conversion) but skip splitting and pushing. Creator economics per skip run:
+
+- Revenue: creator share of the default `apify-actor-start` (~`$0.00004`)
+- Cost: fetch+convert compute. Apify subsidises the first 5 s of compute when the start
+  event is active, so typical skip runs (≤5 s) cost the creator `~$0`. Worst case
+  (large PDF, ~20 s at 256 MB): `~$0.0004`.
+- One full chunking of a 60-chunk document earns `~$0.038` creator share, funding
+  ~75 worst-case skip runs. Users only reach the cache by first paying for a full run.
+
+Amortized margin impact: negligible; customer-retention impact: this is the feature that
+makes scheduled pipelines cheap to operate. Do not price a separate event for skip runs —
+the start event already covers them.
+
 ### Rules for synthetic events
 - `apify-actor-start`: **do not change the price**. Apify subsidises the first 5 seconds of compute for each run when this event is active. Deleting it forfeits that subsidy. The SDK blocks any attempt to manually charge it.
 - `apify-default-dataset-item`: **cannot be renamed** — the name is hardcoded in the Apify platform. Keep it enabled at the prices above; it is the only revenue event for this Actor.

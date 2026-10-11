@@ -4,17 +4,39 @@ This is the only module that touches Apify or the network; everything else
 lives in pure, injectable functions (see ``processing.py`` and ``models.py``).
 """
 
+import hashlib
 import time
 
 from apify import Actor
 from curl_cffi.requests import AsyncSession
-from langchain_text_splitters import (
-    MarkdownHeaderTextSplitter,
-    RecursiveCharacterTextSplitter,
-)
 
 from .models import MarkdownSplitterInput, ProcessingMetrics
-from .processing import format_chunks, resolve_markdown_text
+from .processing import (
+    document_hash,
+    format_chunks,
+    resolve_markdown_text,
+    split_config_fingerprint,
+    split_documents,
+)
+
+#: Key holding the change-detection state inside each cache store.
+_CACHE_RECORD_KEY = "state"
+
+
+def _cache_store_name(params: MarkdownSplitterInput, doc_hash: str) -> str:
+    """Name of the per-source cache store for change detection.
+
+    File-mode sources are keyed by their URL/`kvs://` string so that an
+    edited document overwrites the previous state; text mode is keyed by
+    the document hash itself so identical text always finds its cache.
+    """
+    source = (
+        params.markdown_file.strip()
+        if params.input_mode == "file" and params.markdown_file
+        else f"hash:{doc_hash}"
+    )
+    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:24]
+    return f"markdown-rag-chunker-cache-{digest}"
 
 
 async def main():
@@ -83,41 +105,49 @@ async def main():
                 load_kvs=load_kvs,
             )
 
-            # Convert headers to LangChain format
-            headers = []
-            for h in params.headers_to_split_on:
-                level = h.count("#")
-                headers.append((h, f"Header {level}"))
+            doc_hash = document_hash(markdown_text)
+            config_fingerprint = split_config_fingerprint(params)
 
-            # Split Markdown
-            splitter = MarkdownHeaderTextSplitter(
-                headers_to_split_on=headers, strip_headers=params.strip_headers
-            )
-            documents = splitter.split_text(markdown_text)
-            if params.max_chunk_chars:
-                chunk_overlap = min(
-                    params.max_chunk_chars // 10,
-                    max(params.max_chunk_chars - 1, 0),
-                )
-                recursive_splitter = RecursiveCharacterTextSplitter(
-                    chunk_size=params.max_chunk_chars,
-                    chunk_overlap=chunk_overlap,
-                    separators=["\n\n", "\n", " ", ""],
-                )
-                resized_documents = []
-                for document in documents:
-                    if len(document.page_content or "") <= params.max_chunk_chars:
-                        resized_documents.append(document)
-                        continue
-                    resized_documents.extend(recursive_splitter.split_documents([document]))
-                documents = resized_documents
+            # Change detection: with skip_if_unchanged, a cached state whose
+            # document hash and split settings both match skips splitting and
+            # pushing entirely — the run then costs only the start event.
+            # Cache failures never fail the run; they just re-process.
+            cached_state: dict | None = None
+            cache_store = None
+            if params.skip_if_unchanged:
+                try:
+                    cache_store = await Actor.open_key_value_store(
+                        name=_cache_store_name(params, doc_hash)
+                    )
+                    cached_state = await cache_store.get_value(_CACHE_RECORD_KEY)
+                except Exception as exc:
+                    Actor.log.warning(f"Cache read skipped: {exc}")
 
-            # Format output
-            chunks = format_chunks(documents)
-            if len(chunks) > params.max_chunks:
-                raise ValueError(
-                    f"Chunk count {len(chunks)} exceeds max_chunks ({params.max_chunks})."
+            if (
+                isinstance(cached_state, dict)
+                and cached_state.get("document_hash") == doc_hash
+                and cached_state.get("split_config") == config_fingerprint
+            ):
+                metrics = ProcessingMetrics(
+                    input_mode=params.input_mode,
+                    input_file_type=input_file_type,
+                    input_chars=len(markdown_text),
+                    chunk_count=0,
+                    elapsed_ms=int((time.perf_counter() - started_at) * 1000),
+                    document_hash=doc_hash,
+                    unchanged=True,
+                    cached_chunk_count=cached_state.get("chunk_count"),
                 )
+                await Actor.set_value("OUTPUT", metrics.model_dump(exclude_none=True))
+                Actor.log.info(
+                    f"Document unchanged (document_hash={doc_hash}); skipped "
+                    "chunking. No dataset items were pushed or billed."
+                )
+                return
+
+            # Split Markdown (header-aware first pass, cap-aware second
+            # pass, max_chunks enforced) and format one record per chunk.
+            chunks = format_chunks(split_documents(params, markdown_text))
 
             elapsed_ms = int((time.perf_counter() - started_at) * 1000)
             metrics = ProcessingMetrics(
@@ -126,15 +156,30 @@ async def main():
                 input_chars=len(markdown_text),
                 chunk_count=len(chunks),
                 elapsed_ms=elapsed_ms,
+                document_hash=doc_hash,
             )
 
             # One dataset item per chunk: users pay per chunk (matches the
             # published pay-per-event pricing). Metrics go to the named
             # OUTPUT record in the default key-value store (the Python SDK's
             # equivalent of set_output), which is not billed as a dataset item.
-            await Actor.set_value("OUTPUT", metrics.model_dump())
+            # exclude_none keeps the record free of null placeholders.
+            await Actor.set_value("OUTPUT", metrics.model_dump(exclude_none=True))
             if chunks:
                 await Actor.push_data([chunk.model_dump() for chunk in chunks])
+
+            if cache_store is not None:
+                try:
+                    await cache_store.set_value(
+                        _CACHE_RECORD_KEY,
+                        {
+                            "document_hash": doc_hash,
+                            "split_config": config_fingerprint,
+                            "chunk_count": len(chunks),
+                        },
+                    )
+                except Exception as exc:
+                    Actor.log.warning(f"Cache write skipped: {exc}")
 
         except Exception as e:
             error_msg = f"Actor failed: {str(e)}"

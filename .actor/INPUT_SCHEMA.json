@@ -7,9 +7,13 @@
     "input_mode": {
       "title": "Input Mode",
       "type": "string",
-      "description": "Use text to paste Markdown directly. Use file to load and convert a supported file format from an HTTPS URL or kvs://KEY.",
-      "enum": ["text", "file"],
-      "default": "file"
+      "description": "Use text to paste Markdown directly. Use file to load and convert a supported file format from an HTTP(S) URL or kvs://KEY.",
+      "enum": [
+        "text",
+        "file"
+      ],
+      "default": "file",
+      "editor": "select"
     },
     "markdown_text": {
       "title": "Markdown Text",
@@ -29,9 +33,21 @@
     "headers_to_split_on": {
       "title": "Headers to Split On",
       "type": "array",
-      "description": "Markdown header levels to split on, such as ['#', '##']. Content under headers not listed is merged into parent sections.",
+      "description": "Markdown header levels to split on, such as ['#', '##']. Most RAG pipelines work best with ['#', '##', '###']. Content under headers not listed is merged into parent sections.",
       "editor": "stringList",
-      "default": ["#", "##", "###", "####", "#####", "######"]
+      "default": [
+        "#",
+        "##",
+        "###",
+        "####",
+        "#####",
+        "######"
+      ],
+      "prefill": [
+        "#",
+        "##",
+        "###"
+      ]
     },
     "strip_headers": {
       "title": "Strip Headers",
@@ -42,9 +58,16 @@
     "max_chunk_chars": {
       "title": "Max Chunk Chars",
       "type": "integer",
-      "description": "Optional cap for chunk length in characters. Only oversized chunks are re-split. A common starting point is 1800 chars (about 450 tokens).",
+      "description": "Optional cap for chunk length in characters. Only oversized chunks are re-split (with 10% overlap); smaller sections pass through untouched. A common starting point is 1800 chars (about 450 tokens).",
       "minimum": 1,
-      "maximum": 100000
+      "maximum": 100000,
+      "prefill": 1800
+    },
+    "skip_if_unchanged": {
+      "title": "Skip if Unchanged",
+      "type": "boolean",
+      "description": "Skip re-chunking when the source document and split settings are unchanged since the last run: nothing is pushed to the dataset and the run costs a fraction of a cent. The Output reports unchanged=true with the cached chunk count. Recommended for scheduled and recurring pipelines. First runs always process.",
+      "default": false
     },
     "max_input_chars": {
       "title": "Max Input Chars",
@@ -65,15 +88,14 @@
     "use_apify_proxy": {
       "title": "Use Apify Proxy",
       "type": "boolean",
-      "description": "Route the remote file fetch through Apify Proxy (datacenter). Useful when a site blocks datacenter IPs or rate-limits you. Billed by Apify as standard platform usage. Leave off for direct downloads. Only applies in file mode.",
+      "description": "Route the remote file fetch through Apify Proxy (datacenter). Billed by Apify as standard platform usage. Leave off for direct downloads. Only applies in file mode.",
       "default": false
     },
     "proxy_url": {
       "title": "Custom Proxy URL (free)",
       "type": "string",
-      "description": "Bring your own proxy for the file fetch: http://user:pass@host:8080, https://host:8080, or socks5://host:1080. Free of charge — no Apify proxy fees. Mutually exclusive with Use Apify Proxy. Only applies in file mode.",
-      "editor": "textfield",
-      "prefill": "http://user:pass@proxy.example.com:8080"
+      "description": "Bring your own proxy for the file fetch: http://user:pass@host:8080, https://host:8080, or socks5://host:1080. Free of charge — no Apify proxy fees. Mutually exclusive with Use Apify Proxy. Only applies in file mode. Leave empty for a direct (free) fetch.",
+      "editor": "textfield"
     }
   }
 }

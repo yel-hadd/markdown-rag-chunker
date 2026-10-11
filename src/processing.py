@@ -12,7 +12,86 @@ import json
 import math
 from typing import Any, Awaitable, Callable
 
+from langchain_text_splitters import (
+    MarkdownHeaderTextSplitter,
+    RecursiveCharacterTextSplitter,
+)
+
 from .models import MarkdownChunk, MarkdownSplitterInput
+
+#: Length (hex characters) of the short hashes exposed in output records.
+_SHORT_HASH_LENGTH = 16
+
+
+def _short_hash(payload: bytes) -> str:
+    """First 16 hex characters of the SHA-256 of ``payload``."""
+    return hashlib.sha256(payload).hexdigest()[:_SHORT_HASH_LENGTH]
+
+
+def document_hash(markdown_text: str) -> str:
+    """Stable fingerprint of a resolved document, pre-splitting.
+
+    Exposed in the run Output so users can detect changes between runs
+    and skip re-chunking (and re-paying) when nothing changed.
+    """
+    return _short_hash(markdown_text.encode("utf-8"))
+
+
+def split_config_fingerprint(params: MarkdownSplitterInput) -> str:
+    """Fingerprint of every input that affects how text is split.
+
+    Guards the change-detection cache: if the user changes splitting
+    settings, chunks differ even for an unchanged document, so the cache
+    must not report a hit. Inputs that do not affect splitting (the text
+    itself, limits, proxy settings) are deliberately excluded.
+    """
+    return _short_hash(
+        json.dumps(
+            {
+                "headers_to_split_on": params.headers_to_split_on,
+                "strip_headers": params.strip_headers,
+                "max_chunk_chars": params.max_chunk_chars,
+            },
+            sort_keys=True,
+        ).encode("utf-8")
+    )
+
+
+def split_documents(params: MarkdownSplitterInput, markdown_text: str) -> list[Any]:
+    """Split resolved Markdown into LangChain documents per the input settings.
+
+    Maps each header level to its ``Header N`` metadata key, drops sections
+    whose content ends up empty (a header with no body must not become a
+    billed zero-character chunk), re-splits **only** oversized sections when
+    ``max_chunk_chars`` is set (10% overlap), and enforces ``max_chunks``.
+    """
+    headers = [(h, f"Header {h.count('#')}") for h in params.headers_to_split_on]
+    documents = MarkdownHeaderTextSplitter(
+        headers_to_split_on=headers, strip_headers=params.strip_headers
+    ).split_text(markdown_text)
+    documents = [d for d in documents if (d.page_content or "").strip()]
+
+    if params.max_chunk_chars:
+        cap = params.max_chunk_chars
+        overlap = min(cap // 10, cap - 1)
+        resizer = RecursiveCharacterTextSplitter(
+            chunk_size=cap,
+            chunk_overlap=overlap,
+            separators=["\n\n", "\n", " ", ""],
+        )
+        resized: list[Any] = []
+        for document in documents:
+            if len(document.page_content or "") <= cap:
+                resized.append(document)
+            else:
+                resized.extend(resizer.split_documents([document]))
+        documents = resized
+
+    if len(documents) > params.max_chunks:
+        raise ValueError(
+            f"Chunk count {len(documents)} exceeds max_chunks ({params.max_chunks})."
+        )
+    return documents
 
 
 def format_chunks(documents: list[Any]) -> list[MarkdownChunk]:
