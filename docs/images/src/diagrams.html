@@ -1,97 +1,100 @@
 <!doctype html>
-<!-- README diagrams. Render each #fig at deviceScaleFactor 2; they display at ~773px in the Store, so keep text >= 20px here. -->
+<!-- README diagrams. Portrait, 760px wide, rendered at deviceScaleFactor 2: the Store README column is ~773px,
+     so they display at ~1:1 and text keeps its size (body >= 18px). -->
 <html><head><meta charset="utf-8">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
 :root {
-  --ink: #16181d; --muted: #555d6b; --line: #e1e4ea; --card: #f5f6f8;
+  --ink: #16181d; --muted: #545c6a; --line: #e1e4ea; --card: #f5f6f8;
   --accent: #f2b705; --accent-soft: #fff3c4; --accent-ink: #6e5100;
   --blue: #2a63d4; --red: #c93c3c; --red-soft: #fbe5e5; --green: #1a7f45; --green-soft: #dff3e7;
 }
 * { box-sizing: border-box; margin: 0; }
-body { background: #d9dce2; font-family: Inter, sans-serif; color: var(--ink); padding: 40px; }
-.fig { background: #fff; border-radius: 24px; padding: 40px 44px; width: 1200px; margin-bottom: 40px; }
-h1 { font-size: 38px; font-weight: 700; letter-spacing: -.015em; }
+body { background: #d9dce2; font-family: Inter, sans-serif; color: var(--ink); padding: 30px; }
+.fig { background: #fff; border-radius: 22px; padding: 32px; width: 760px; margin-bottom: 30px; }
+h1 { font-size: 30px; font-weight: 700; letter-spacing: -.015em; line-height: 1.2; }
 .mono { font-family: 'JetBrains Mono', monospace; }
-.foot { margin-top: 22px; font-size: 18px; color: var(--muted); }
+.foot { margin-top: 18px; font-size: 16px; color: var(--muted); }
 
-/* Pipeline: three stages */
-.flow { display: grid; grid-template-columns: 262px 40px 1fr 40px 1.18fr; margin-top: 30px; align-items: stretch; }
-.arrow { display: flex; align-items: center; justify-content: center; font-size: 34px; color: #9aa0ab; }
-.stage { background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 24px; }
-.stage h2 { font-size: 26px; font-weight: 600; line-height: 1.2; }
-.stage .hint { font-size: 20px; color: var(--muted); margin-top: 6px; }
-.chips { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 20px; }
-.chip { font: 600 20px 'JetBrains Mono', monospace; text-align: center; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 10px 0; }
-.blocks { display: flex; flex-direction: column; gap: 9px; margin-top: 20px; }
-.blk { display: flex; justify-content: space-between; align-items: center; background: #fff; border: 1px solid var(--line); border-radius: 10px; padding: 11px 14px; font-size: 20px; }
-.blk .t { font: 600 20px 'JetBrains Mono', monospace; color: var(--muted); }
+/* Pipeline: one stage per row */
+.row { display: grid; grid-template-columns: 44px 1fr; gap: 6px 16px; margin-top: 16px; }
+.num { width: 44px; height: 44px; border-radius: 50%; background: var(--accent); color: #241a00; font-weight: 700; font-size: 22px; display: flex; align-items: center; justify-content: center; }
+.row h2 { font-size: 24px; font-weight: 600; line-height: 44px; }
+.row h2 small { font-size: 19px; font-weight: 400; color: var(--muted); margin-left: 8px; }
+.body { grid-column: 2; margin-top: 4px; }
+.down { margin: 8px 0 -6px 13px; color: #a2a8b3; font-size: 26px; line-height: 1; }
+.chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.chip { font: 600 18px 'JetBrains Mono', monospace; background: var(--card); border: 1px solid var(--line); border-radius: 9px; padding: 7px 10px; }
+.blocks { display: flex; flex-direction: column; gap: 6px; }
+.blk { display: flex; justify-content: space-between; align-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 7px 16px; font-size: 20px; }
+.blk .t { font: 600 19px 'JetBrains Mono', monospace; color: var(--muted); }
 .blk.split { background: var(--accent-soft); border-color: #ecd27a; }
-.blk.split.b { margin-top: -9px; border-top: 3px dashed var(--accent); border-top-left-radius: 0; border-top-right-radius: 0; }
 .blk.split.a { border-bottom-left-radius: 0; border-bottom-right-radius: 0; }
-.resplit { font-size: 18px; color: var(--accent-ink); margin-top: 10px; font-weight: 500; }
-.json { margin-top: 20px; background: #14161b; color: #d7dae0; border-radius: 14px; padding: 18px 20px; font: 18.5px/1.75 'JetBrains Mono', monospace; white-space: nowrap; }
-.json .k { color: #8fb8ff; } .json .s { color: #b5e08a; } .json .n { color: #f2c86b; }
-.sink { margin-top: 24px; display: flex; align-items: center; gap: 12px; font-size: 22px; flex-wrap: wrap; }
-.sink b { font-weight: 600; margin-right: 6px; }
-.sink span { background: #e8eefb; color: #1d4597; border-radius: 10px; padding: 7px 14px; font-weight: 600; }
+.blk.split.b { margin-top: -6px; border-top: 3px dashed var(--accent); border-top-left-radius: 0; border-top-right-radius: 0; }
+.tagline { font-size: 18px; color: var(--accent-ink); font-weight: 500; margin-top: 10px; }
+.json { background: #14161b; color: #d7dae0; border-radius: 14px; padding: 18px 22px; font: 19px/1.7 'JetBrains Mono', monospace; }
+.json .k { color: #8fb8ff; } .json .s { color: #b5e08a; } .json .n { color: #f2c86b; } .json .c { color: #858b98; }
+.stores { display: flex; flex-wrap: wrap; gap: 9px; }
+.stores span { background: #e8eefb; color: #1d4597; border-radius: 9px; padding: 7px 13px; font-size: 19px; font-weight: 600; }
 
-/* Comparison */
-.cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 30px; }
-.col { border-radius: 18px; padding: 24px; border: 1px solid var(--line); }
-.col h2 { font-size: 26px; font-weight: 600; }
-.verdict { margin-top: 20px; font-size: 22px; font-weight: 600; display: flex; gap: 10px; align-items: center; }
+/* Comparison: two narrow columns */
+.cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 24px; }
+.col { border-radius: 16px; padding: 18px; border: 1px solid var(--line); }
+.col h2 { font-size: 21px; font-weight: 600; line-height: 1.25; }
+.verdict { margin-top: 16px; font-size: 19px; font-weight: 600; line-height: 1.3; }
 .bad .verdict { color: var(--red); } .good .verdict { color: var(--green); }
-.doc { position: relative; margin-top: 18px; display: grid; grid-template-columns: 1fr 190px; gap: 0 18px; }
-.sec { border-left: 4px solid var(--line); padding: 10px 0 12px 16px; }
-.sec b { display: block; font: 600 20px 'JetBrains Mono', monospace; color: var(--blue); margin-bottom: 6px; }
-.bar { background: #eceef2; border-radius: 5px; height: 11px; margin: 9px 0; }
+.doc { position: relative; margin-top: 12px; display: grid; grid-template-columns: 1fr 112px; gap: 0 12px; }
+.sec { border-left: 4px solid var(--line); padding: 8px 0 10px 12px; }
+.sec b { display: block; font: 600 18px 'JetBrains Mono', monospace; color: var(--blue); margin-bottom: 4px; }
+.bar { background: #eceef2; border-radius: 5px; height: 10px; margin: 8px 0; }
 .chunks { position: relative; }
-.ck { position: absolute; left: 0; right: 0; border-radius: 10px; font-size: 19px; font-weight: 600; display: flex; align-items: center; justify-content: center; text-align: center; line-height: 1.2; }
+.ck { position: absolute; left: 0; right: 0; border-radius: 9px; font-size: 17px; font-weight: 600; display: flex; align-items: center; justify-content: center; text-align: center; line-height: 1.15; }
 .bad .ck { background: var(--red-soft); color: var(--red); border: 2px solid #eeb4b4; }
 .good .ck { background: var(--green-soft); color: var(--green); border: 2px solid #a5d8ba; }
 .good .ck.ov { background: repeating-linear-gradient(45deg, #b4dfc6 0 6px, #dff3e7 6px 12px); border-style: dashed; z-index: 2; }
-.cut { position: absolute; left: -18px; right: 190px; border-top: 3px dashed var(--red); }
-.cut::after { content: '✂'; position: absolute; right: -4px; top: -16px; color: var(--red); font-size: 22px; background: #fff; }
+.cut { position: absolute; left: -12px; right: 112px; border-top: 3px dashed var(--red); }
+.cut::after { content: '✂'; position: absolute; right: -6px; top: -15px; color: var(--red); font-size: 20px; background: #fff; }
 </style></head><body>
 
 <div class="fig" id="pipeline">
   <h1>From any document to RAG-ready chunks</h1>
-  <div class="flow">
-    <div class="stage">
-      <h2>Any document</h2>
-      <div class="hint">URL or pasted text</div>
-      <div class="chips"><span class="chip">PDF</span><span class="chip">DOCX</span><span class="chip">PPTX</span><span class="chip">XLSX</span><span class="chip">EPUB</span><span class="chip">HTML</span><span class="chip">CSV</span><span class="chip">JSON</span><span class="chip">MD</span></div>
-    </div>
-    <div class="arrow">→</div>
-    <div class="stage">
-      <h2>Split on headings</h2>
-      <div class="hint">Capped at 512 tokens</div>
+
+  <div class="row"><div class="num">1</div><h2>Any document <small>URL or pasted text</small></h2>
+    <div class="body"><div class="chips"><span class="chip">PDF</span><span class="chip">DOCX</span><span class="chip">PPTX</span><span class="chip">XLSX</span><span class="chip">EPUB</span><span class="chip">HTML</span><span class="chip">CSV</span><span class="chip">JSON</span><span class="chip">MD</span></div></div>
+  </div>
+  <div class="down">↓</div>
+
+  <div class="row"><div class="num">2</div><h2>Split on headings <small>capped at 512 tokens</small></h2>
+    <div class="body">
       <div class="blocks">
-        <div class="blk"><span>Intro</span><span class="t">212</span></div>
-        <div class="blk"><span>What does it do?</span><span class="t">506</span></div>
-        <div class="blk split a"><span>Chunking strategy</span><span class="t">449</span></div>
-        <div class="blk split b"><span>Chunking strategy</span><span class="t">261</span></div>
-        <div class="blk"><span>How to chunk</span><span class="t">138</span></div>
+        <div class="blk"><span>Intro</span><span class="t">212 tokens</span></div>
+        <div class="blk"><span>What does it do?</span><span class="t">506 tokens</span></div>
+        <div class="blk split a"><span>Chunking strategy</span><span class="t">449 tokens</span></div>
+        <div class="blk split b"><span>Chunking strategy</span><span class="t">261 tokens</span></div>
+        <div class="blk"><span>How to chunk</span><span class="t">138 tokens</span></div>
       </div>
-      <div class="resplit">Too long → re-split with overlap</div>
-    </div>
-    <div class="arrow">→</div>
-    <div class="stage">
-      <h2>One JSON item per chunk</h2>
-      <div class="hint">Ready to embed and upsert</div>
-      <div class="json">
-<span class="k">chunk_id</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="s">"40f492eb583b87fb"</span><br>
-<span class="k">header_path</span> <span class="s">"Chunking strategy"</span><br>
-<span class="k">token_count</span> <span class="n">449</span><br>
-<span class="k">chunk_index</span> <span class="n">2</span> <span style="color:#7c8290">of</span> <span class="n">40</span><br>
-<span class="k">source</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="s">"…/README.md"</span><br>
-<span class="k">embedding_text</span><br><span class="s">"Chunking strategy\n\n…"</span>
-      </div>
+      <div class="tagline">A section over the cap is re-split with 10% overlap; the rest stay whole.</div>
     </div>
   </div>
-  <div class="sink"><b>Load into</b><span>Pinecone</span><span>Qdrant</span><span>Weaviate</span><span>pgvector</span><span>LangChain</span><span>LlamaIndex</span></div>
-  <div class="foot">Token counts and fields from a real run on this README (October 2026). Section names shortened.</div>
+  <div class="down">↓</div>
+
+  <div class="row"><div class="num">3</div><h2>One JSON item per chunk</h2>
+    <div class="body"><div class="json">
+<span class="k">"chunk_id"</span>: <span class="s">"40f492eb583b87fb"</span>,<br>
+<span class="k">"header_path"</span>: <span class="s">"Chunking strategy"</span>,<br>
+<span class="k">"token_count"</span>: <span class="n">449</span>,<br>
+<span class="k">"chunk_index"</span>: <span class="n">2</span>, <span class="k">"chunk_total"</span>: <span class="n">40</span>,<br>
+<span class="k">"embedding_text"</span>: <span class="s">"Chunking strategy\n\n…"</span><br>
+<span class="c">+ content, source, metadata, document_hash</span>
+    </div></div>
+  </div>
+  <div class="down">↓</div>
+
+  <div class="row"><div class="num">4</div><h2>Embed and upsert by <span class="mono" style="font-size:22px">chunk_id</span></h2>
+    <div class="body"><div class="stores"><span>Pinecone</span><span>Qdrant</span><span>Weaviate</span><span>pgvector</span><span>LangChain</span><span>LlamaIndex</span></div></div>
+  </div>
+
+  <div class="foot">Token counts and IDs from a real run on this README (October 2026); section names shortened.</div>
 </div>
 
 <div class="fig" id="compare">
@@ -101,9 +104,9 @@ h1 { font-size: 38px; font-weight: 700; letter-spacing: -.015em; }
       <h2>Fixed-size windows</h2>
       <div class="doc">
         <div>
-          <div class="sec"><b>## Install</b><div class="bar" style="width:90%"></div><div class="bar" style="width:68%"></div></div>
-          <div class="sec"><b>## Auth</b><div class="bar" style="width:95%"></div><div class="bar" style="width:84%"></div><div class="bar" style="width:92%"></div><div class="bar" style="width:86%"></div><div class="bar" style="width:58%"></div></div>
-          <div class="sec"><b>## Limits</b><div class="bar" style="width:80%"></div><div class="bar" style="width:52%"></div></div>
+          <div class="sec"><b>## Install</b><div class="bar" style="width:90%"></div><div class="bar" style="width:66%"></div></div>
+          <div class="sec"><b>## Auth</b><div class="bar" style="width:95%"></div><div class="bar" style="width:82%"></div><div class="bar" style="width:92%"></div><div class="bar" style="width:86%"></div><div class="bar" style="width:56%"></div></div>
+          <div class="sec"><b>## Limits</b><div class="bar" style="width:80%"></div><div class="bar" style="width:50%"></div></div>
         </div>
         <div class="chunks"><div class="ck">Chunk 1</div><div class="ck">Chunk 2</div><div class="ck">3</div></div>
         <div class="cut"></div><div class="cut"></div>
@@ -111,19 +114,19 @@ h1 { font-size: 38px; font-weight: 700; letter-spacing: -.015em; }
       <div class="verdict">✗ Chunks cut through sections</div>
     </div>
     <div class="col good">
-      <h2>Header-aware + 512-token cap</h2>
+      <h2>Header-aware (this Actor)</h2>
       <div class="doc">
         <div>
-          <div class="sec"><b>## Install</b><div class="bar" style="width:90%"></div><div class="bar" style="width:68%"></div></div>
-          <div class="sec"><b>## Auth</b><div class="bar" style="width:95%"></div><div class="bar" style="width:84%"></div><div class="bar" style="width:92%"></div><div class="bar" style="width:86%"></div><div class="bar" style="width:58%"></div></div>
-          <div class="sec"><b>## Limits</b><div class="bar" style="width:80%"></div><div class="bar" style="width:52%"></div></div>
+          <div class="sec"><b>## Install</b><div class="bar" style="width:90%"></div><div class="bar" style="width:66%"></div></div>
+          <div class="sec"><b>## Auth</b><div class="bar" style="width:95%"></div><div class="bar" style="width:82%"></div><div class="bar" style="width:92%"></div><div class="bar" style="width:86%"></div><div class="bar" style="width:56%"></div></div>
+          <div class="sec"><b>## Limits</b><div class="bar" style="width:80%"></div><div class="bar" style="width:50%"></div></div>
         </div>
         <div class="chunks"><div class="ck">Install</div><div class="ck">Auth 1/2</div><div class="ck ov"></div><div class="ck">Auth 2/2</div><div class="ck">Limits</div></div>
       </div>
-      <div class="verdict">✓ Every chunk stays in one section</div>
+      <div class="verdict">✓ Chunks follow sections</div>
     </div>
   </div>
-  <div class="foot">Schematic. Only sections over the cap are re-split, with 10% overlap; each chunk keeps its header path.</div>
+  <div class="foot">Schematic. Only the oversized section is re-split, with a small overlap; each chunk keeps its header path.</div>
 </div>
 
 <script>
@@ -139,7 +142,7 @@ for (const col of document.querySelectorAll('.col')) {
     ck.forEach((el, i) => place(el, cuts[i], cuts[i + 1]));
     col.querySelectorAll('.cut').forEach((el, i) => el.style.top = cuts[i + 1] + 'px');
   } else {
-    const [a, b] = secs[1], m = (a + b) / 2, ov = 10;
+    const [a, b] = secs[1], m = (a + b) / 2, ov = 9;
     place(ck[0], secs[0][0], secs[0][1]); place(ck[1], a, m + ov);
     ck[2].style.top = (m - ov) + 'px'; ck[2].style.height = (2 * ov) + 'px';
     place(ck[3], m - ov, b); place(ck[4], secs[2][0], secs[2][1]);
