@@ -16,7 +16,7 @@
 - **Downloads like a real browser** with [curl_cffi](https://github.com/lexiforest/curl_cffi) and a genuine Chrome TLS fingerprint, with optional Apify Proxy or your own proxy. Files up to 25 MB.
 - **Skips unchanged documents** on scheduled runs: an unchanged file is not even re-converted, and the run costs only the $0.001 start fee.
 
-## Why header-aware chunking is the right strategy for RAG
+## Best chunking strategy for RAG: header-aware splitting
 
 Split on the document's headings first, then cap only the sections that are too long, in tokens. LangChain's documentation recommends this two-step pattern for Markdown, and retrieval benchmarks reward its result: chunks of a few hundred tokens that follow the author's structure and carry their context.
 
@@ -143,11 +143,13 @@ A failed run also writes Output, as `{"failed": true, "error": "..."}`, so pipel
 | `unchanged` / `cached_chunk_count` | Output | Set when Skip if unchanged skipped the run |
 | `charge_limit_reached` | Output | `true` if your maximum charge per run stopped delivery early |
 
-## Load chunks into a vector store
+## How do I load chunks into a vector database?
 
 Embed `embedding_text`, keep `content` for display, and upsert by `chunk_id`. To keep an index in sync, after each run delete the chunks whose `source` matches and whose `document_hash` differs from the new one.
 
-**Qdrant** (point IDs must be UUIDs or integers, so derive one from `chunk_id`):
+### Qdrant
+
+Point IDs must be UUIDs or integers, so derive one from `chunk_id`:
 
 ```python
 import uuid
@@ -164,7 +166,7 @@ points = [
 qdrant.upsert(collection_name="docs", points=points)
 ```
 
-**Pinecone**:
+### Pinecone
 
 ```python
 index.upsert(vectors=[
@@ -174,7 +176,9 @@ index.upsert(vectors=[
 ])
 ```
 
-**pgvector** (Postgres):
+No code needed: Apify's [Pinecone Integration](https://apify.com/apify/pinecone-integration?fpr=use-apify) and [Qdrant Integration](https://apify.com/apify/qdrant-integration?fpr=use-apify) Actors can load a dataset into your index and compute the embeddings for you.
+
+### pgvector (Postgres)
 
 ```sql
 INSERT INTO chunks (chunk_id, source, header_path, content, document_hash, embedding)
@@ -184,7 +188,7 @@ ON CONFLICT (chunk_id) DO UPDATE
 DELETE FROM chunks WHERE source = $2 AND document_hash <> $5;
 ```
 
-**LangChain**:
+### LangChain
 
 ```python
 from langchain_core.documents import Document
@@ -271,6 +275,18 @@ Proxy traffic is included in the price, and the two options are mutually exclusi
 
 If you need JavaScript rendering and full-site crawls in one product, Firecrawl fits. If you already have documents or Markdown and want deterministic, header-aware chunks with stable IDs, or you want to chunk [Website Content Crawler](https://apify.com/apify/website-content-crawler?fpr=use-apify) output on Apify, use this Actor.
 
+## Who is it for?
+
+- **AI engineers building RAG** chatbots, semantic search or support assistants over documents
+- **Agent builders** who need large reference documents in budget-sized pieces, also through MCP
+- **Data teams** running scheduled ingestion pipelines that should only re-embed what changed
+
+It is not the right tool for:
+
+- **Scanned PDFs** or images of text: there is no OCR, so run OCR first
+- **JavaScript-rendered sites or whole-site crawls**: use [Website Content Crawler](https://apify.com/apify/website-content-crawler?fpr=use-apify), then chunk its output here
+- **Splitting a PDF into pages or files**: this Actor splits text into chunks for embedding
+
 ## Use cases
 
 - **RAG over documentation**: split product docs and changelogs into retrievable sections
@@ -305,6 +321,14 @@ Paste the PDF URL into **Document URL** and run the Actor. The PDF is converted 
 ### How do I convert a web page to Markdown chunks?
 
 Paste the page URL into **Document URL**. The page is downloaded with a real Chrome TLS fingerprint, converted from HTML to Markdown, and split by its headings.
+
+### How do I split Markdown by headers like LangChain's MarkdownHeaderTextSplitter?
+
+Paste the Markdown into **Markdown text** (or its URL into **Document URL**) and set **Headers to split on**. The Actor runs LangChain's `MarkdownHeaderTextSplitter` itself, so `metadata` uses the same `Header 1`, `Header 2` keys, then re-splits only the sections over the token cap with `RecursiveCharacterTextSplitter`.
+
+### Does it work on scanned PDFs or JavaScript-heavy sites?
+
+No. PDFs must contain a text layer; a scanned PDF fails with an error that suggests OCR. Pages are downloaded without running JavaScript, so for single-page apps and full-site crawls, run [Website Content Crawler](https://apify.com/apify/website-content-crawler?fpr=use-apify) first and pass its Markdown here.
 
 ### Why are some chunks smaller than the cap?
 
