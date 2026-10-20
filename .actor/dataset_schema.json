@@ -11,7 +11,7 @@
       "embedding_text": {
         "type": "string",
         "title": "Embedding text",
-        "description": "header_path, a blank line, then content. Embed this field for better retrieval."
+        "description": "header_path, a blank line, then content (just content before the first heading). Embed this field."
       },
       "metadata": {
         "type": "object",
@@ -21,7 +21,7 @@
       "header_path": {
         "type": "string",
         "title": "Header path",
-        "description": "Section path, e.g. 'Guide > Install > Windows'; empty above the first header."
+        "description": "Section path, e.g. 'Guide > Install > Windows'; empty before the first heading."
       },
       "chunk_id": {
         "type": "string",
@@ -41,7 +41,7 @@
       "source": {
         "type": ["string", "null"],
         "title": "Source",
-        "description": "Source URL or kvs://KEY; null for pasted text."
+        "description": "source_id, the URL, or kvs://<store>/<key>; null for pasted text without source_id."
       },
       "document_hash": {
         "type": "string",

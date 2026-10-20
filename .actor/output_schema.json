@@ -6,13 +6,13 @@
     "ragChunks": {
       "type": "string",
       "title": "RAG Chunk Results",
-      "description": "Dataset items containing one RAG-ready chunk each (content, metadata, chunk_id, char_count, token_count).",
+      "description": "One RAG-ready chunk per item: content, embedding_text, metadata, header_path, chunk_id, token_count and provenance fields.",
       "template": "{{links.apiDefaultDatasetUrl}}/items"
     },
     "runMetrics": {
       "type": "string",
       "title": "Run Metrics",
-      "description": "Run summary (input_mode, input_file_type, input_chars, chunk_count, elapsed_ms, document_hash, unchanged, charge_limit_reached) stored as the OUTPUT record.",
+      "description": "The OUTPUT record: chunk_count, document_hash, input details, elapsed_ms, and the unchanged and charge_limit_reached flags; {failed, error} if the run failed.",
       "template": "{{links.apiDefaultKeyValueStoreUrl}}/records/OUTPUT"
     }
   }

@@ -201,13 +201,13 @@ class MarkdownChunk(BaseModel):
     chunk_id: str = Field(..., description="Deterministic, source-scoped chunk identifier")
     chunk_index: int = Field(0, ge=0, description="0-based position in the document")
     chunk_total: int = Field(0, ge=0, description="Number of chunks in the document")
-    source: Optional[str] = Field(None, description="Source URL or kvs://KEY; null for pasted text")
+    source: Optional[str] = Field(None, description="source_id, the URL, or kvs://<store>/<key>; null for pasted text without source_id")
     document_hash: str = Field("", description="Fingerprint of the converted document")
     embedding_text: str = Field(
-        "", description="header_path and content joined by a blank line, ready to embed"
+        "", description="header_path, a blank line, then content (just content when header_path is empty)"
     )
     char_count: int = Field(..., ge=0, description="Number of characters in content")
-    token_count: int = Field(..., ge=0, description="Estimated token count in content")
+    token_count: int = Field(..., ge=0, description="Exact token count of content with the selected tokenizer")
 
 
 class ProcessingMetrics(BaseModel):

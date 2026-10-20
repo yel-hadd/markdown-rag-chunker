@@ -44,7 +44,7 @@ Split on the document's headings first, then cap only the sections that are too 
 1. Paste a document URL into **Document URL**, or paste Markdown into **Markdown text**.
 2. Keep the defaults for most documents: split on `#`, `##`, `###` and cap chunks at 512 tokens.
 3. If the site blocks direct downloads, turn on **Use Apify Proxy**.
-4. Press **Start**. Each chunk is one dataset item, and run totals appear in the run's **Output**.
+4. Press **Start**. Each chunk is one dataset item; run totals are under **Run Metrics**.
 5. For scheduled pipelines, turn on **Skip if unchanged**.
 
 Then embed each item's `embedding_text` and store `chunk_id`, `source`, `header_path` and `metadata` next to the vector.
@@ -57,8 +57,8 @@ This Actor uses [pay-per-event pricing](https://docs.apify.com/platform/actors/p
 - **$0.001 per run** at the default 1 GB memory (one start event per GB if you choose more memory for very large PDFs)
 - Compute, storage and proxy traffic are included in these prices
 - A run skipped by **Skip if unchanged** pushes no chunks and costs only the $0.001 run fee
-- Run metrics in the Output record are free
-- You can set a maximum charge per run in Apify; the Actor stops delivering chunks at that limit and reports it in the Output
+- The `OUTPUT` run metrics are free
+- You can set a maximum charge per run in Apify; the Actor stops delivering chunks at that limit and reports it in `OUTPUT`
 
 | Input | Chunks (approx.) | Cost (approx.) |
 | --- | --- | --- |
@@ -69,15 +69,15 @@ This Actor uses [pay-per-event pricing](https://docs.apify.com/platform/actors/p
 
 ## Input
 
-The input form in Apify Console, prefilled with this README and the default chunking settings:
+The prefilled input form:
 
 <a href="https://console.apify.com/actors/84h4GucI0gbo1SrN7?fpr=use-apify"><img src="https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/docs/images/markdown-rag-chunker-input-form.png?v=3" alt="Markdown RAG Chunker input form in Apify Console with a document URL and the chunking strategy settings" width="75%"></a>
 
-The same settings as JSON for the API, here for a Wikipedia article:
+The same input as JSON:
 
 ```json
 {
-  "markdown_file": "https://en.wikipedia.org/wiki/Giant_panda",
+  "markdown_file": "https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/README.md",
   "headers_to_split_on": ["#", "##", "###"],
   "max_chunk_tokens": 512,
   "tokenizer": "cl100k_base"
@@ -101,61 +101,62 @@ Send `markdown_file` (a URL) or `markdown_text` (Markdown); each run chunks one 
 
 ## Output
 
-Each chunk is one dataset item. In the Console's **Chunks** view of the prefilled run on this README (40 chunks in about 10 seconds when the screenshot was taken), each row shows the chunk's section, token count and content:
+Each chunk is one dataset item. The **Chunks** view after running that input (October 2026: 40 chunks in 10 seconds):
 
-<img src="https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/docs/images/markdown-rag-chunker-output-chunks.png?v=3" alt="Markdown RAG Chunker output in Apify Console: a table of chunks with section header path, token count, content and chunk ID">
+<img src="https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/docs/images/markdown-rag-chunker-output-chunks.png?v=3" alt="Markdown RAG Chunker output in Apify Console: a table of chunks with their section, token count and content">
 
-A real chunk from the Giant panda input above, as JSON (`content` shortened):
+One chunk from the same run (`content` shortened):
 
 ```json
 {
-  "content": "In [Taiwan](https://en.wikipedia.org/wiki/Taiwan \"Taiwan\"), another popular name for panda is the inverted *dàmāoxióng* (大貓熊; lit.'giant cat bear')…",
-  "metadata": { "Header 1": "Giant panda", "Header 2": "Etymology" },
-  "header_path": "Giant panda > Etymology",
-  "chunk_id": "d5bc2488a2717298",
-  "chunk_index": 7,
-  "chunk_total": 198,
-  "source": "https://en.wikipedia.org/wiki/Giant_panda",
-  "document_hash": "f9974bfd4079e9eb",
-  "embedding_text": "Giant panda > Etymology\n\nIn [Taiwan](https://en.wikipedia.org/wiki/Taiwan \"Taiwan\"), another popular name…",
-  "char_count": 884,
-  "token_count": 243
+  "content": "1. Paste a document URL into **Document URL**, or paste Markdown into **Markdown text**.\n2. Keep the defaults…",
+  "metadata": { "Header 2": "How to chunk a document for RAG" },
+  "header_path": "How to chunk a document for RAG",
+  "chunk_id": "4453c90da38521f2",
+  "chunk_index": 4,
+  "chunk_total": 40,
+  "source": "https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/README.md",
+  "document_hash": "85028e0aeeeaf6a1",
+  "embedding_text": "How to chunk a document for RAG\n\n1. Paste a document URL into **Document URL**…",
+  "char_count": 535,
+  "token_count": 138
 }
 ```
 
-The run's named **Output** for the same document:
+Its `OUTPUT` record (**Run Metrics** in the Console):
 
 ```json
 {
   "input_mode": "file",
-  "input_file_type": "text/html; charset=utf-8",
-  "input_chars": 228068,
-  "chunk_count": 198,
-  "elapsed_ms": 2306,
-  "document_hash": "f9974bfd4079e9eb",
+  "input_file_type": "text/plain; charset=utf-8",
+  "input_chars": 26028,
+  "chunk_count": 40,
+  "elapsed_ms": 1478,
+  "document_hash": "85028e0aeeeaf6a1",
   "unchanged": false,
   "charge_limit_reached": false
 }
 ```
 
-A failed run also writes Output, as `{"failed": true, "error": "..."}`, so pipelines can read the reason without parsing logs.
+A failed run writes `{"failed": true, "error": "..."}` to `OUTPUT`, so pipelines can read the reason without parsing logs.
 
 | Field | Where | Description |
 | --- | --- | --- |
 | `content` | dataset item | Chunk text, for display and citations |
-| `embedding_text` | dataset item | `header_path` + blank line + `content`; embed this for better retrieval |
+| `embedding_text` | dataset item | `header_path` + blank line + `content` (just `content` before the first heading); embed this |
 | `metadata` | dataset item | Headers as `Header 1`, `Header 2`, … (LangChain format) |
-| `header_path` | dataset item | Section path, e.g. `Guide > Install > Windows` |
+| `header_path` | dataset item | Section path, e.g. `Guide > Install > Windows`; empty before the first heading |
 | `chunk_id` | dataset item | Stable 16-character ID, scoped to the source; use as the upsert key |
 | `chunk_index` / `chunk_total` | dataset item | 0-based position in the document and the number of chunks |
 | `source` | dataset item | `source_id`, the URL, or `kvs://<store>/<key>`; `null` for pasted text without `source_id` |
-| `document_hash` | dataset item and Output | Fingerprint of the converted document; changes when the document changes |
+| `document_hash` | dataset item and `OUTPUT` | Fingerprint of the converted document; changes when the document changes |
 | `char_count` | dataset item | Character length of `content` |
 | `token_count` | dataset item | Exact token count of `content` with the chosen `tokenizer` |
-| `input_file_type` | Output | Source MIME type (for example `application/pdf`) |
-| `chunk_count` | Output | Chunks delivered in this run |
-| `unchanged` / `cached_chunk_count` | Output | Set when Skip if unchanged skipped the run |
-| `charge_limit_reached` | Output | `true` if your maximum charge per run stopped delivery early |
+| `input_mode` / `input_chars` | `OUTPUT` | `file` or `text`, and the converted document's length in characters |
+| `input_file_type` | `OUTPUT` | Source MIME type, e.g. `application/pdf` |
+| `chunk_count` / `elapsed_ms` | `OUTPUT` | Chunks delivered in this run, and processing time |
+| `unchanged` / `cached_chunk_count` | `OUTPUT` | Set when Skip if unchanged skipped the run |
+| `charge_limit_reached` | `OUTPUT` | `true` if your maximum charge per run stopped delivery early |
 
 ## How do I load chunks into a vector database?
 
@@ -224,7 +225,7 @@ from apify_client import ApifyClient
 
 client = ApifyClient("YOUR_APIFY_TOKEN")
 run = client.actor("codepoetry/markdown-rag-chunker").call(run_input={
-    "markdown_file": "https://example.com/docs/handbook.pdf",
+    "markdown_file": "https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/README.md",
     "headers_to_split_on": ["#", "##", "###"],
 })
 for item in client.dataset(run["defaultDatasetId"]).iterate_items():
@@ -238,7 +239,7 @@ import { ApifyClient } from 'apify-client';
 
 const client = new ApifyClient({ token: 'YOUR_APIFY_TOKEN' });
 const run = await client.actor('codepoetry/markdown-rag-chunker').call({
-    markdown_file: 'https://example.com/docs/handbook.pdf',
+    markdown_file: 'https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/README.md',
     headers_to_split_on: ['#', '##', '###'],
 });
 const { items } = await client.dataset(run.defaultDatasetId).listItems();
@@ -306,7 +307,6 @@ It is not the right tool for:
 - **RAG over documentation**: split product docs and changelogs into retrievable sections
 - **Knowledge bases**: load internal PDFs and Word documents into a vector store with stable IDs
 - **Support search**: chunk help-center articles for semantic search
-- **AI agents**: give agents large reference documents in budget-sized pieces, also through MCP
 - **Crawler post-processing**: run after Website Content Crawler to turn crawled pages into chunks
 
 ## Related Actors
@@ -354,11 +354,11 @@ Yes. Splitting uses [LangChain's text splitters](https://docs.langchain.com/oss/
 
 ### Why is my dataset empty after a run?
 
-If **Skip if unchanged** is on and the document and chunking settings match the previous run, nothing is pushed and the Output shows `unchanged: true` with the earlier `chunk_count`. That run costs only the $0.001 start fee. Turn the option off to push the chunks again.
+If **Skip if unchanged** is on and the document and chunking settings match the previous run, nothing is pushed and `OUTPUT` shows `unchanged: true` with the earlier `chunk_count`. That run costs only the $0.001 start fee. Turn the option off to push the chunks again.
 
 ### What happens when I reach my maximum charge per run?
 
-The Actor delivers chunks up to your limit, then stops. The Output shows `charge_limit_reached: true` and the number of chunks delivered, and the run is not cached, so the next run processes the document again.
+The Actor delivers chunks up to your limit, then stops. `OUTPUT` shows `charge_limit_reached: true` and the number of chunks delivered, and the run is not cached, so the next run processes the document again.
 
 ### Can I chunk a document stored in Apify?
 
@@ -366,7 +366,7 @@ Yes. Set **Document URL** to `kvs://KEY` and pick the store in **Key-value store
 
 ### How accurate is `token_count`?
 
-It is exact for the chosen `tokenizer` (`cl100k_base` by default, the tokenizer of OpenAI's text-embedding-3 models). Other providers' tokenizers differ by roughly 10 to 20% on English, so leave some headroom below their input limits.
+It is exact for the chosen `tokenizer` (`cl100k_base` by default, the tokenizer of OpenAI's text-embedding-3 models). Other providers' tokenizers differ by roughly 10 to 25%, so leave some headroom below their input limits.
 
 ### Can I chunk many documents at once?
 
@@ -403,7 +403,7 @@ Report bugs or request features in the [Issues](https://apify.com/codepoetry/mar
 ### v1.1
 
 - One dataset item per chunk, so billing matches the per-chunk price exactly
-- Run metrics moved to the run's named **Output**
+- Run metrics moved to the `OUTPUT` record
 - Chrome-fingerprinted downloads with [curl_cffi](https://github.com/lexiforest/curl_cffi), plus Apify Proxy or your own proxy
 
 ### v1.0
