@@ -1,0 +1,190 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --ink: #16181d; --muted: #5b6270; --faint: #8a909c; --line: #e3e5ea; --card: #f6f7f9;
+  --accent: #f2b705; --accent-soft: #fff4cc; --accent-ink: #7a5a00;
+  --blue: #2f6fdf; --blue-soft: #e6eefc; --red: #d64545; --red-soft: #fbe7e7; --green: #1f8a4c; --green-soft: #e3f4ea;
+}
+* { box-sizing: border-box; margin: 0; }
+body { background: #d9dce2; font-family: Inter, sans-serif; color: var(--ink); padding: 40px; }
+.fig { background: #fff; border-radius: 20px; padding: 40px 44px 36px; width: 1600px; margin-bottom: 40px; }
+h1 { font-size: 26px; font-weight: 700; letter-spacing: -.01em; }
+.sub { color: var(--muted); font-size: 16px; margin-top: 6px; }
+.mono { font-family: 'JetBrains Mono', monospace; }
+
+/* Pipeline */
+.flow { display: grid; grid-template-columns: 1fr 34px 1.05fr 34px 1.15fr 34px 1.35fr; align-items: stretch; margin-top: 30px; }
+.arrow { display: flex; align-items: center; justify-content: center; color: var(--faint); font-size: 26px; }
+.stage { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px; display: flex; flex-direction: column; }
+.step { font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--accent-ink); }
+.stage h2 { font-size: 19px; font-weight: 600; margin: 4px 0 4px; }
+.stage p { font-size: 13.5px; color: var(--muted); line-height: 1.45; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 16px; }
+.chip { font: 500 12.5px 'JetBrains Mono', monospace; background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px; }
+.md { margin-top: 16px; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 12px; font: 12.5px/1.75 'JetBrains Mono', monospace; color: var(--muted); }
+.md b { color: var(--ink); font-weight: 500; }
+.md .h { color: var(--blue); }
+.blocks { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+.blk { border-radius: 7px; padding: 7px 10px; font-size: 12.5px; display: flex; justify-content: space-between; gap: 8px; background: #fff; border: 1px solid var(--line); }
+.blk .t { font: 500 12px 'JetBrains Mono', monospace; color: var(--muted); white-space: nowrap; }
+.blk.split { background: var(--accent-soft); border-color: #f0d77a; }
+.blk.split + .blk.split { margin-top: -10px; border-top: 2px dashed var(--accent); }
+.note { font-size: 12px; color: var(--accent-ink); margin-top: 8px; }
+.json { margin-top: 14px; background: #14161b; color: #d7dae0; border-radius: 10px; padding: 14px 16px; font: 12.5px/1.7 'JetBrains Mono', monospace; flex: 1; }
+.json .k { color: #8fb8ff; } .json .s { color: #b5e08a; } .json .n { color: #f2c86b; } .json .c { color: #7c8290; }
+.sink { margin-top: 22px; display: flex; align-items: center; gap: 14px; background: var(--blue-soft); border-radius: 12px; padding: 14px 18px; font-size: 15px; }
+.sink b { font-weight: 600; }
+.sink .stores { display: flex; gap: 8px; margin-left: auto; }
+.sink .stores span { background: #fff; border-radius: 6px; padding: 5px 10px; font-size: 13.5px; font-weight: 500; }
+
+/* Comparison */
+.cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; margin-top: 28px; }
+.col { border: 1px solid var(--line); border-radius: 14px; padding: 22px; }
+.col h2 { font-size: 19px; font-weight: 600; display: flex; align-items: center; gap: 10px; }
+.tag { font-size: 12px; font-weight: 600; border-radius: 999px; padding: 3px 10px; }
+.bad .tag { background: var(--red-soft); color: var(--red); } .good .tag { background: var(--green-soft); color: var(--green); }
+.doc { position: relative; margin-top: 18px; display: grid; grid-template-columns: 1fr 150px; gap: 0 16px; }
+.sec { border-left: 3px solid var(--line); padding: 8px 0 8px 14px; font-size: 13px; color: var(--muted); }
+.sec b { display: block; font: 500 13px 'JetBrains Mono', monospace; color: var(--blue); margin-bottom: 4px; }
+.bar { background: #eef0f3; border-radius: 4px; height: 8px; margin: 6px 0; }
+.chunks { position: relative; }
+.ck { position: absolute; left: 0; right: 0; border-radius: 8px; font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+.bad .ck { background: var(--red-soft); color: var(--red); border: 1.5px solid #efb7b7; }
+.good .ck { background: var(--green-soft); color: var(--green); border: 1.5px solid #a9dbbd; }
+.good .ck.ov { background: repeating-linear-gradient(45deg, #b9e2c9 0 5px, #e3f4ea 5px 10px); border-style: dashed; font-size: 0; z-index: 2; }
+.cut { position: absolute; left: -16px; right: 150px; border-top: 2px dashed var(--red); }
+.cut::after { content: '✂'; position: absolute; right: -2px; top: -12px; color: var(--red); font-size: 15px; background: #fff; }
+ul.why { margin-top: 18px; padding-left: 18px; font-size: 14px; line-height: 1.6; color: var(--ink); }
+ul.why li::marker { color: var(--faint); }
+.foot { margin-top: 18px; font-size: 12.5px; color: var(--faint); }
+</style></head><body>
+
+<div class="fig" id="pipeline">
+  <h1>How Markdown RAG Chunker turns a document into RAG chunks</h1>
+  <div class="sub">One run, one document. Every chunk below is from a real run on this Actor's README (40 chunks, 10 s).</div>
+  <div class="flow">
+    <div class="stage">
+      <div class="step">1 · Input</div>
+      <h2>Your document</h2>
+      <p>A URL, pasted Markdown, or an Apify key-value store record. Files up to 25&nbsp;MB.</p>
+      <div class="chips"><span class="chip">PDF</span><span class="chip">DOCX</span><span class="chip">PPTX</span><span class="chip">XLSX</span><span class="chip">XLS</span><span class="chip">EPUB</span><span class="chip">HTML</span><span class="chip">CSV</span><span class="chip">JSON</span><span class="chip">XML</span><span class="chip">MD</span><span class="chip">TXT</span></div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="stage">
+      <div class="step">2 · Convert</div>
+      <h2>Markdown</h2>
+      <p>Converted with Microsoft's markitdown, keeping the author's headings.</p>
+      <div class="md">
+        <b>Markdown RAG Chunker</b> splits…<br>
+        <span class="h">##</span> <b>What does … do?</b><br>
+        <span class="h">##</span> <b>Best chunking strategy…</b><br>
+        <span class="h">##</span> <b>How to chunk a document…</b><br>
+        …
+      </div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="stage">
+      <div class="step">3 · Split</div>
+      <h2>Header-aware chunks</h2>
+      <p>Split on <span class="mono">#</span> <span class="mono">##</span> <span class="mono">###</span>, then cap only oversized sections at 512 tokens.</p>
+      <div class="blocks">
+        <div class="blk"><span>Intro</span><span class="t">212 tok</span></div>
+        <div class="blk"><span>What does … do?</span><span class="t">506 tok</span></div>
+        <div class="blk split"><span>Best chunking strategy</span><span class="t">449 tok</span></div>
+        <div class="blk split"><span>Best chunking strategy</span><span class="t">261 tok</span></div>
+        <div class="blk"><span>How to chunk…</span><span class="t">138 tok</span></div>
+      </div>
+      <div class="note">One section over the cap → re-split with 10% overlap</div>
+    </div>
+    <div class="arrow">→</div>
+    <div class="stage">
+      <div class="step">4 · Output</div>
+      <h2>One dataset item per chunk</h2>
+      <div class="json">{<br>
+&nbsp;&nbsp;<span class="k">"chunk_id"</span>: <span class="s">"40f492eb583b87fb"</span>,<br>
+&nbsp;&nbsp;<span class="k">"header_path"</span>: <span class="s">"Best chunking strategy…"</span>,<br>
+&nbsp;&nbsp;<span class="k">"token_count"</span>: <span class="n">449</span>,<br>
+&nbsp;&nbsp;<span class="k">"chunk_index"</span>: <span class="n">2</span>, <span class="k">"chunk_total"</span>: <span class="n">40</span>,<br>
+&nbsp;&nbsp;<span class="k">"source"</span>: <span class="s">"https://…/README.md"</span>,<br>
+&nbsp;&nbsp;<span class="k">"document_hash"</span>: <span class="s">"85028e0aeeeaf6a1"</span>,<br>
+&nbsp;&nbsp;<span class="k">"embedding_text"</span>: <span class="s">"Best chunking…\n\n…"</span><br>
+&nbsp;&nbsp;<span class="c">…content, metadata, char_count</span><br>
+}</div>
+    </div>
+  </div>
+  <div class="sink"><b>Embed <span class="mono">embedding_text</span>, upsert by <span class="mono">chunk_id</span></b><span style="color:var(--muted)">into any vector store</span>
+    <div class="stores"><span>Pinecone</span><span>Qdrant</span><span>Weaviate</span><span>pgvector</span><span>LangChain</span><span>LlamaIndex</span></div></div>
+</div>
+
+<div class="fig" id="compare" style="width:1400px">
+  <h1>Fixed-size windows vs header-aware chunking</h1>
+  <div class="sub">The same three-section document, split two ways (schematic).</div>
+  <div class="cmp">
+    <div class="col bad">
+      <h2>Fixed-size windows <span class="tag">cuts across sections</span></h2>
+      <div class="doc">
+        <div>
+          <div class="sec"><b>## Install</b><div class="bar" style="width:90%"></div><div class="bar" style="width:70%"></div></div>
+          <div class="sec"><b>## Authentication</b><div class="bar" style="width:95%"></div><div class="bar" style="width:85%"></div><div class="bar" style="width:92%"></div><div class="bar" style="width:88%"></div><div class="bar" style="width:60%"></div></div>
+          <div class="sec"><b>## Rate limits</b><div class="bar" style="width:80%"></div><div class="bar" style="width:55%"></div></div>
+        </div>
+        <div class="chunks">
+          <div class="ck">Chunk 1</div>
+          <div class="ck">Chunk 2</div>
+          <div class="ck">Chunk 3</div>
+        </div>
+        <div class="cut"></div><div class="cut"></div>
+      </div>
+      <ul class="why">
+        <li>Chunk 1 mixes <b>Install</b> with the start of <b>Authentication</b></li>
+        <li>Authentication is cut mid-explanation</li>
+        <li>No chunk knows which section it came from</li>
+      </ul>
+    </div>
+    <div class="col good">
+      <h2>Header-aware + size cap <span class="tag">this Actor</span></h2>
+      <div class="doc">
+        <div>
+          <div class="sec"><b>## Install</b><div class="bar" style="width:90%"></div><div class="bar" style="width:70%"></div></div>
+          <div class="sec"><b>## Authentication</b><div class="bar" style="width:95%"></div><div class="bar" style="width:85%"></div><div class="bar" style="width:92%"></div><div class="bar" style="width:88%"></div><div class="bar" style="width:60%"></div></div>
+          <div class="sec"><b>## Rate limits</b><div class="bar" style="width:80%"></div><div class="bar" style="width:55%"></div></div>
+        </div>
+        <div class="chunks">
+          <div class="ck">Install</div>
+          <div class="ck">Authentication 1/2</div>
+          <div class="ck ov">overlap</div>
+          <div class="ck">Authentication 2/2</div>
+          <div class="ck">Rate limits</div>
+        </div>
+      </div>
+      <ul class="why">
+        <li>Every chunk stays inside one section</li>
+        <li>Only the section over 512 tokens is re-split, with 10% overlap</li>
+        <li>Each chunk carries <span class="mono">header_path</span>, e.g. <span class="mono">Authentication</span></li>
+      </ul>
+    </div>
+  </div>
+</div>
+<script>
+for (const col of document.querySelectorAll('.col')) {
+  const doc = col.querySelector('.doc'), top = doc.getBoundingClientRect().top;
+  const secs = [...col.querySelectorAll('.sec')].map(e => { const r = e.getBoundingClientRect(); return [r.top - top, r.bottom - top]; });
+  const H = secs[2][1], g = 4, place = (el, a, b) => { el.style.top = (a + g / 2) + 'px'; el.style.height = (b - a - g) + 'px'; };
+  const ck = [...col.querySelectorAll('.ck')];
+  if (col.classList.contains('bad')) {
+    // Equal windows sized so both cuts land mid-paragraph, never on a heading.
+    const w = (secs[2][0] + 0.7 * (secs[2][1] - secs[2][0])) / 2, cuts = [0, w, 2 * w, H];
+    ck.forEach((el, i) => place(el, cuts[i], cuts[i + 1]));
+    col.querySelectorAll('.cut').forEach((el, i) => el.style.top = cuts[i + 1] + 'px');
+  } else {
+    const [a, b] = secs[1], m = (a + b) / 2, ov = 8;
+    place(ck[0], secs[0][0], secs[0][1]); place(ck[1], a, m + ov);
+    ck[2].style.top = (m - ov) + 'px'; ck[2].style.height = (2 * ov) + 'px';
+    place(ck[3], m - ov, b); place(ck[4], secs[2][0], secs[2][1]);
+  }
+  doc.querySelector('.chunks').style.height = H + 'px';
+}
+</script>
+</body></html>
