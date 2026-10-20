@@ -2,6 +2,8 @@
 
 import json
 import unittest
+
+import tiktoken
 from pathlib import Path
 from types import ModuleType
 from unittest.mock import patch
@@ -15,11 +17,14 @@ from src.processing import (
     convert_to_markdown,
     document_hash,
     format_chunks,
+    http_error_message,
     read_capped,
     resolve_markdown_text,
+    retry_delay,
     source_fingerprint,
     split_config_fingerprint,
     split_documents,
+    validation_error_message,
 )
 
 
@@ -134,11 +139,27 @@ class InputModelFieldBoundsTests(unittest.TestCase):
         obj = MarkdownSplitterInput(markdown_text="# H", max_chunk_chars=1800)
         self.assertEqual(obj.max_chunk_chars, 1800)
 
-    def test_max_chunk_chars_defaults_to_about_400_tokens(self) -> None:
-        # ~400 tokens: Chroma's 2024 chunking study found 200-400 token
-        # recursive chunks consistently strong for retrieval.
+    def test_chunk_size_defaults_to_512_tokens(self) -> None:
+        # 200-512 tokens is the best-supported range for modern embedders
+        # (Chroma 2024, NVIDIA 2025); 512 is Voyage's contextual default.
         obj = MarkdownSplitterInput(markdown_text="# H")
-        self.assertEqual(obj.max_chunk_chars, 1600)
+        self.assertEqual(obj.max_chunk_tokens, 512)
+        self.assertIsNone(obj.max_chunk_chars)
+        self.assertEqual(obj.tokenizer, "cl100k_base")
+
+    def test_max_chunk_tokens_bounds(self) -> None:
+        for bad in (49, 8193):
+            with self.assertRaises(ValidationError, msg=bad):
+                MarkdownSplitterInput(markdown_text="# H", max_chunk_tokens=bad)
+        for good in (50, 8192, None):
+            obj = MarkdownSplitterInput(markdown_text="# H", max_chunk_tokens=good)
+            self.assertEqual(obj.max_chunk_tokens, good)
+
+    def test_tokenizer_choices(self) -> None:
+        obj = MarkdownSplitterInput(markdown_text="# H", tokenizer="o200k_base")
+        self.assertEqual(obj.tokenizer, "o200k_base")
+        with self.assertRaises(ValidationError):
+            MarkdownSplitterInput(markdown_text="# H", tokenizer="gpt2")
 
     def test_max_chunk_chars_null_disables_cap(self) -> None:
         obj = MarkdownSplitterInput(markdown_text="# H", max_chunk_chars=None)
@@ -231,9 +252,10 @@ class InputModelHeaderValidatorTests(unittest.TestCase):
         with self.assertRaises(ValidationError):
             MarkdownSplitterInput(markdown_text="# H", headers_to_split_on=["# Title"])
 
-    def test_default_headers(self) -> None:
+    def test_default_headers_are_three_levels(self) -> None:
+        # Section-level chunks; matches the Console prefill and the README.
         obj = MarkdownSplitterInput(markdown_text="# H")
-        self.assertEqual(obj.headers_to_split_on, ["#", "##", "###", "####", "#####", "######"])
+        self.assertEqual(obj.headers_to_split_on, ["#", "##", "###"])
 
     def test_headers_are_normalised(self) -> None:
         obj = MarkdownSplitterInput(
@@ -587,6 +609,30 @@ class CacheRecordKeyTests(unittest.TestCase):
         self.assertNotEqual(cache_record_key(p, "h1"), cache_record_key(p, "h2"))
 
 
+class RetryDelayTests(unittest.TestCase):
+    def test_success_and_client_errors_are_not_retried(self) -> None:
+        for status in (200, 301, 400, 403, 404, 410):
+            self.assertIsNone(retry_delay(status, None, attempt=0), status)
+
+    def test_rate_limit_and_server_errors_are_retried_with_backoff(self) -> None:
+        for status in (429, 500, 502, 503, 504):
+            self.assertEqual(retry_delay(status, None, attempt=0), 1.0, status)
+        self.assertEqual(retry_delay(503, None, attempt=1), 2.0)
+
+    def test_gives_up_after_max_attempts(self) -> None:
+        self.assertIsNone(retry_delay(503, None, attempt=2))
+
+    def test_honours_retry_after_seconds_within_cap(self) -> None:
+        self.assertEqual(retry_delay(429, "3", attempt=0), 3.0)
+
+    def test_caps_long_retry_after(self) -> None:
+        # Waiting minutes would burn the user's run time and our compute.
+        self.assertEqual(retry_delay(429, "120", attempt=0), 5.0)
+
+    def test_ignores_unparseable_retry_after(self) -> None:
+        self.assertEqual(retry_delay(429, "Wed, 21 Oct 2026 07:28:00 GMT", attempt=0), 1.0)
+
+
 class ReadCappedTests(unittest.IsolatedAsyncioTestCase):
     @staticmethod
     async def _parts(*parts: bytes):
@@ -644,6 +690,57 @@ class CacheHitTests(unittest.TestCase):
             self.assertFalse(cache_hit(state, "c1", document_hash="d1"))
 
 
+class InputModelDefaultsTests(unittest.TestCase):
+    def test_max_input_chars_default_fits_a_long_manual(self) -> None:
+        # A 300-page PDF converts to ~600k-1M characters.
+        self.assertEqual(MarkdownSplitterInput(markdown_text="# H").max_input_chars, 2_000_000)
+
+    def test_cache_namespace_defaults_empty(self) -> None:
+        self.assertEqual(MarkdownSplitterInput(markdown_text="# H").cache_namespace, "")
+
+
+class CacheNamespaceTests(unittest.TestCase):
+    def test_namespace_separates_pipelines(self) -> None:
+        dev = MarkdownSplitterInput(markdown_file="https://a.example/x.pdf", cache_namespace="dev")
+        prod = MarkdownSplitterInput(markdown_file="https://a.example/x.pdf", cache_namespace="prod")
+        self.assertNotEqual(cache_record_key(dev, ""), cache_record_key(prod, ""))
+
+    def test_kvs_store_is_part_of_the_key(self) -> None:
+        a = MarkdownSplitterInput(markdown_file="kvs://doc", kvs_store="store-a")
+        b = MarkdownSplitterInput(markdown_file="kvs://doc", kvs_store="store-b")
+        self.assertNotEqual(cache_record_key(a, ""), cache_record_key(b, ""))
+
+
+class ErrorMessageTests(unittest.TestCase):
+    def test_blocked_suggests_proxy(self) -> None:
+        for status in (401, 403, 429):
+            msg = http_error_message(status, "https://a.example/x.pdf")
+            self.assertIn(str(status), msg)
+            self.assertIn("use_apify_proxy", msg)
+
+    def test_not_found_names_the_url(self) -> None:
+        msg = http_error_message(404, "https://a.example/x.pdf")
+        self.assertIn("404", msg)
+        self.assertIn("https://a.example/x.pdf", msg)
+        self.assertNotIn("use_apify_proxy", msg)
+
+    def test_validation_errors_are_one_line_per_field(self) -> None:
+        with self.assertRaises(ValidationError) as ctx:
+            MarkdownSplitterInput(markdown_text="# H", max_chunks=0)
+        msg = validation_error_message(ctx.exception)
+        self.assertIn("max_chunks", msg)
+        self.assertNotIn("pydantic.dev", msg)
+        self.assertNotIn("\n", msg)
+
+    def test_model_level_errors_have_no_field_prefix(self) -> None:
+        with self.assertRaises(ValidationError) as ctx:
+            MarkdownSplitterInput()
+        self.assertEqual(
+            validation_error_message(ctx.exception),
+            "Invalid input: Provide markdown_text or markdown_file.",
+        )
+
+
 class SplitConfigFingerprintTests(unittest.TestCase):
     def _params(self, **kw) -> MarkdownSplitterInput:
         base = dict(markdown_text="# H")
@@ -661,6 +758,11 @@ class SplitConfigFingerprintTests(unittest.TestCase):
             split_config_fingerprint(self._params()),
             split_config_fingerprint(self._params(headers_to_split_on=["#"])),
         )
+
+    def test_token_settings_change_fingerprint(self) -> None:
+        base = split_config_fingerprint(self._params())
+        self.assertNotEqual(base, split_config_fingerprint(self._params(max_chunk_tokens=256)))
+        self.assertNotEqual(base, split_config_fingerprint(self._params(tokenizer="o200k_base")))
 
     def test_max_chunk_chars_change_fingerprint(self) -> None:
         self.assertNotEqual(
@@ -711,15 +813,20 @@ class FormatChunksTests(unittest.TestCase):
         chunks = format_chunks([self._Doc("abc", {"Header 1": "H1"})])
         self.assertEqual(len(chunks), 1)
         self.assertEqual(chunks[0].char_count, 3)
-        self.assertEqual(chunks[0].token_count, 1)  # ceil(3/4)
 
-    def test_token_count_formula(self) -> None:
-        # 4 chars → ceil(4/4) = 1
-        chunks = format_chunks([self._Doc("abcd", {})])
-        self.assertEqual(chunks[0].token_count, 1)
-        # 5 chars → ceil(5/4) = 2
-        chunks = format_chunks([self._Doc("abcde", {})])
-        self.assertEqual(chunks[0].token_count, 2)
+    def test_token_count_is_real_tokenizer_count(self) -> None:
+        # chars/4 undercounts CJK by 2-5x; count real tokens instead.
+        text = "这是一个用于测试的中文句子。"
+        for name in ("cl100k_base", "o200k_base"):
+            chunk = format_chunks([self._Doc(text, {})], tokenizer=name)[0]
+            self.assertEqual(chunk.token_count, len(tiktoken.get_encoding(name).encode(text)))
+
+    def test_embedding_text_prepends_header_path(self) -> None:
+        chunk = format_chunks([self._Doc("Use pip.", {"Header 1": "Guide", "Header 2": "Install"})])[0]
+        self.assertEqual(chunk.embedding_text, "Guide > Install\n\nUse pip.")
+
+    def test_embedding_text_is_content_without_headers(self) -> None:
+        self.assertEqual(format_chunks([self._Doc("Intro text", {})])[0].embedding_text, "Intro text")
 
     def test_empty_content_produces_zero_counts(self) -> None:
         chunks = format_chunks([self._Doc("", {})])
@@ -781,6 +888,47 @@ class FormatChunksTests(unittest.TestCase):
         alone = format_chunks([self._Doc("x", {})])[0].chunk_id
         first, _second = format_chunks([self._Doc("x", {}), self._Doc("x", {})])
         self.assertEqual(first.chunk_id, alone)
+
+    def test_identical_chunks_in_different_sources_get_distinct_ids(self) -> None:
+        # A shared "## License" section in two documents must not overwrite
+        # the other document's vector when upserting by chunk_id.
+        doc = self._Doc("MIT", {"Header 2": "License"})
+        a = format_chunks([doc], source="https://a.example/x.pdf")[0].chunk_id
+        b = format_chunks([doc], source="https://b.example/y.pdf")[0].chunk_id
+        self.assertNotEqual(a, b)
+
+    def test_text_mode_ids_are_scoped_by_document_hash(self) -> None:
+        doc = self._Doc("MIT", {"Header 2": "License"})
+        a = format_chunks([doc], document_hash="aaaa")[0].chunk_id
+        b = format_chunks([doc], document_hash="bbbb")[0].chunk_id
+        self.assertNotEqual(a, b)
+
+    def test_ids_stable_for_same_source(self) -> None:
+        doc = self._Doc("MIT", {"Header 2": "License"})
+        a = format_chunks([doc], source="https://a.example/x.pdf", document_hash="h1")[0]
+        b = format_chunks([doc], source="https://a.example/x.pdf", document_hash="h2")[0]
+        # Unchanged sections keep their ID when another part of the file changes.
+        self.assertEqual(a.chunk_id, b.chunk_id)
+
+    def test_provenance_fields(self) -> None:
+        chunks = format_chunks(
+            [self._Doc("a", {"Header 1": "Guide"}), self._Doc("b", {"Header 1": "Guide"})],
+            source="https://a.example/x.pdf",
+            document_hash="h1",
+        )
+        self.assertEqual([c.chunk_index for c in chunks], [0, 1])
+        self.assertEqual({c.chunk_total for c in chunks}, {2})
+        self.assertEqual({c.source for c in chunks}, {"https://a.example/x.pdf"})
+        self.assertEqual({c.document_hash for c in chunks}, {"h1"})
+
+    def test_header_path_follows_header_level_not_dict_order(self) -> None:
+        chunk = format_chunks(
+            [self._Doc("x", {"Header 3": "Windows", "Header 1": "Guide", "Header 2": "Install"})]
+        )[0]
+        self.assertEqual(chunk.header_path, "Guide > Install > Windows")
+
+    def test_header_path_empty_without_headers(self) -> None:
+        self.assertEqual(format_chunks([self._Doc("x", {})])[0].header_path, "")
 
     def test_metadata_preserved(self) -> None:
         chunks = format_chunks([self._Doc("text", {"Header 1": "Intro", "Header 2": "Sub"})])
@@ -1159,6 +1307,52 @@ class SplitDocumentsTests(unittest.TestCase):
         )
         self.assertLessEqual(len(docs), 5)
 
+    def test_cjk_text_splits_at_sentence_ends(self) -> None:
+        # CJK has no spaces; without sentence separators the splitter would
+        # cut mid-sentence at the character level.
+        sentence = "这是一个用于测试的中文句子，它没有空格。"
+        docs = split_documents(
+            self._params(headers_to_split_on=[], max_chunk_chars=100), sentence * 20
+        )
+        self.assertGreater(len(docs), 1)
+        for d in docs[:-1]:
+            self.assertTrue(d.page_content.endswith("。"), d.page_content[-5:])
+
+    def test_token_cap_bounds_every_chunk(self) -> None:
+        enc = tiktoken.get_encoding("cl100k_base")
+        for text in ("word " * 3000, "这是一个用于测试的中文句子，它没有空格。" * 300):
+            docs = split_documents(self._params(headers_to_split_on=[]), text)
+            self.assertGreater(len(docs), 1)
+            self.assertLessEqual(max(len(enc.encode(d.page_content)) for d in docs), 512)
+
+    def test_sections_under_token_cap_stay_whole(self) -> None:
+        docs = split_documents(self._params(headers_to_split_on=["#"]), "# A\nshort body")
+        self.assertEqual([d.page_content for d in docs], ["short body"])
+
+    def test_char_cap_overrides_token_cap(self) -> None:
+        docs = split_documents(
+            self._params(headers_to_split_on=[], max_chunk_chars=300), "word " * 600
+        )
+        self.assertLessEqual(max(len(d.page_content) for d in docs), 300)
+
+    def test_no_cap_when_both_disabled(self) -> None:
+        text = "word " * 3000
+        docs = split_documents(
+            self._params(headers_to_split_on=[], max_chunk_tokens=None), text
+        )
+        self.assertEqual(len(docs), 1)
+
+    def test_token_mode_early_max_chunks_check(self) -> None:
+        with patch(
+            "src.processing.RecursiveCharacterTextSplitter.split_documents",
+            side_effect=AssertionError("re-split should not run"),
+        ):
+            with self.assertRaisesRegex(ValueError, "max_chunks"):
+                split_documents(
+                    self._params(headers_to_split_on=[], max_chunk_tokens=50, max_chunks=10),
+                    "word " * 5000,
+                )
+
     def test_chunk_count_exceeding_max_chunks_raises(self) -> None:
         text = "# A\none\n\n# B\ntwo"
         with self.assertRaisesRegex(ValueError, "max_chunks"):
@@ -1202,9 +1396,10 @@ class SchemaCongruenceTests(unittest.TestCase):
     def test_numeric_limits_match_model(self) -> None:
         props = self.schema["properties"]
         cases = {
-            "max_input_chars": {"default": 500_000, "minimum": 1, "maximum": 5_000_000},
+            "max_input_chars": {"default": 2_000_000, "minimum": 1, "maximum": 5_000_000},
             "max_chunks": {"default": 5_000, "minimum": 1, "maximum": 50_000},
-            "max_chunk_chars": {"default": 1600, "minimum": 100, "maximum": 100_000},
+            "max_chunk_chars": {"minimum": 100, "maximum": 100_000},
+            "max_chunk_tokens": {"default": 512, "minimum": 50, "maximum": 8192},
         }
         for field, expected in cases.items():
             for key, value in expected.items():
@@ -1215,7 +1410,25 @@ class SchemaCongruenceTests(unittest.TestCase):
     def test_null_chunk_cap_passes_platform_validation(self) -> None:
         # The model accepts null to disable the cap; the platform validates
         # API input against the schema first, so the field must be nullable.
-        self.assertIs(self.schema["properties"]["max_chunk_chars"].get("nullable"), True)
+        for field in ("max_chunk_chars", "max_chunk_tokens"):
+            self.assertIs(self.schema["properties"][field].get("nullable"), True, field)
+
+    def test_tokenizer_enum_matches_model(self) -> None:
+        field = self.schema["properties"]["tokenizer"]
+        self.assertEqual(field["enum"], ["cl100k_base", "o200k_base"])
+        self.assertEqual(field["default"], "cl100k_base")
+
+    def test_headers_default_matches_model(self) -> None:
+        self.assertEqual(
+            self.schema["properties"]["headers_to_split_on"]["default"],
+            MarkdownSplitterInput(markdown_text="# H").headers_to_split_on,
+        )
+
+    def test_dataset_schema_matches_chunk_model(self) -> None:
+        path = Path(__file__).resolve().parent.parent / ".actor" / "dataset_schema.json"
+        fields = json.loads(path.read_text())["fields"]
+        self.assertEqual(set(fields["properties"]), set(MarkdownChunk.model_fields))
+        self.assertEqual(set(fields["required"]), set(MarkdownChunk.model_fields))
 
     def test_every_model_field_is_represented(self) -> None:
         schema_fields = set(self.schema["properties"])
@@ -1305,6 +1518,12 @@ class ConvertToMarkdownTests(unittest.TestCase):
     def test_real_markitdown_converts_declared_csv_to_table(self) -> None:
         result = convert_to_markdown(b"name,qty\napple,3\n", "text/csv")
         self.assertIn("| name | qty |", result)
+
+    def test_empty_result_mentions_scanned_pdfs(self) -> None:
+        fake = self._fake_markitdown_module("  ")
+        with patch.dict("sys.modules", {"markitdown": fake}):
+            with self.assertRaisesRegex(ValueError, "OCR"):
+                convert_to_markdown(b"%PDF", "application/pdf")
 
     def test_raises_when_result_is_none(self) -> None:
         fake = self._fake_markitdown_module(None)

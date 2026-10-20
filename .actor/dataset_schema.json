@@ -6,52 +6,89 @@
       "content": {
         "type": "string",
         "title": "Content",
-        "description": "Chunk text content to send to your embedding model."
+        "description": "Chunk text, for display and citations."
+      },
+      "embedding_text": {
+        "type": "string",
+        "title": "Embedding text",
+        "description": "header_path, a blank line, then content. Embed this field for better retrieval."
       },
       "metadata": {
         "type": "object",
         "title": "Metadata",
-        "description": "Header hierarchy metadata, typically keys such as Header 1, Header 2, and Header 3."
+        "description": "Headers as Header 1, Header 2, ... (LangChain format)."
+      },
+      "header_path": {
+        "type": "string",
+        "title": "Header path",
+        "description": "Section path, e.g. 'Guide > Install > Windows'; empty above the first header."
       },
       "chunk_id": {
         "type": "string",
         "title": "Chunk ID",
-        "description": "Stable identifier for idempotent upserts, deduplication, and cache keys in downstream vector workflows."
+        "description": "Stable 16-character ID scoped to the source; use it as the vector-store upsert key."
+      },
+      "chunk_index": {
+        "type": "integer",
+        "title": "Chunk index",
+        "description": "0-based position of the chunk in the document."
+      },
+      "chunk_total": {
+        "type": "integer",
+        "title": "Chunk total",
+        "description": "Number of chunks produced from the document."
+      },
+      "source": {
+        "type": ["string", "null"],
+        "title": "Source",
+        "description": "Source URL or kvs://KEY; null for pasted text."
+      },
+      "document_hash": {
+        "type": "string",
+        "title": "Document hash",
+        "description": "Fingerprint of the converted document; changes when the document changes."
       },
       "char_count": {
         "type": "integer",
-        "title": "Character Count",
-        "description": "Number of characters in the chunk content."
+        "title": "Character count",
+        "description": "Number of characters in content."
       },
       "token_count": {
         "type": "integer",
-        "title": "Estimated Token Count",
-        "description": "Approximate token count for embedding budget planning, based on roughly 1 token per 4 characters."
+        "title": "Token count",
+        "description": "Exact token count of content with the selected tokenizer (cl100k_base by default)."
       }
     },
-    "required": ["content", "metadata", "chunk_id", "char_count", "token_count"]
+    "required": [
+      "content",
+      "embedding_text",
+      "metadata",
+      "header_path",
+      "chunk_id",
+      "chunk_index",
+      "chunk_total",
+      "source",
+      "document_hash",
+      "char_count",
+      "token_count"
+    ]
   },
   "views": {
     "overview": {
       "title": "Chunks",
-      "description": "One RAG-ready chunk per item, with header metadata and stable IDs.",
+      "description": "One RAG-ready chunk per item, in document order.",
       "transformation": {
-        "fields": [
-          "chunk_id",
-          "char_count",
-          "token_count",
-          "content",
-          "metadata"
-        ]
+        "fields": ["chunk_index", "header_path", "token_count", "content", "chunk_id", "source"]
       },
       "display": {
         "component": "table",
         "properties": {
-          "chunk_id": { "label": "Chunk ID", "format": "text" },
-          "char_count": { "label": "Chars", "format": "number" },
-          "token_count": { "label": "~Tokens", "format": "number" },
+          "chunk_index": { "label": "#", "format": "number" },
+          "header_path": { "label": "Section", "format": "text" },
+          "token_count": { "label": "Tokens", "format": "number" },
           "content": { "label": "Content", "format": "text" },
-          "metadata": { "label": "Headers", "format": "text" }
+          "chunk_id": { "label": "Chunk ID", "format": "text" },
+          "source": { "label": "Source", "format": "link" }
         }
       }
     }

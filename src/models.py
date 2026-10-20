@@ -43,22 +43,32 @@ class MarkdownSplitterInput(BaseModel):
         ),
     )
     max_input_chars: int = Field(
-        500_000, ge=1, le=5_000_000, description="Maximum accepted input size in chars"
+        2_000_000, ge=1, le=5_000_000, description="Maximum accepted input size in chars"
     )
     max_chunks: int = Field(
         5_000, ge=1, le=50_000, description="Maximum number of chunks produced"
     )
-    max_chunk_chars: Optional[int] = Field(
-        1600,
-        ge=100,
-        le=100_000,
+    max_chunk_tokens: Optional[int] = Field(
+        512,
+        ge=50,
+        le=8192,
         description=(
-            "Second-pass cap for chunk size in characters (default ~400 tokens); "
-            "only oversized sections are re-split. null disables the cap."
+            "Second-pass cap for chunk size in tokens of `tokenizer`; only oversized "
+            "sections are re-split. null disables the cap."
         ),
     )
+    max_chunk_chars: Optional[int] = Field(
+        None,
+        ge=100,
+        le=100_000,
+        description="Cap chunk size in characters instead of tokens; overrides max_chunk_tokens.",
+    )
+    tokenizer: Literal["cl100k_base", "o200k_base"] = Field(
+        "cl100k_base",
+        description="tiktoken encoding used for max_chunk_tokens and token_count.",
+    )
     headers_to_split_on: list[str] = Field(
-        default=["#", "##", "###", "####", "#####", "######"],
+        default=["#", "##", "###"],
         description="Header levels to split on (e.g., ['#', '##'])",
     )
     strip_headers: bool = Field(True, description="Remove headers from chunks")
@@ -70,6 +80,14 @@ class MarkdownSplitterInput(BaseModel):
             "the run costs only the start event. The Output reports "
             "unchanged=true with the cached chunk count. First runs always "
             "process."
+        ),
+    )
+    cache_namespace: str = Field(
+        "",
+        max_length=100,
+        description=(
+            "Separates change-detection state between pipelines (e.g. 'dev' and "
+            "'prod') that chunk the same source."
         ),
     )
     use_apify_proxy: bool = Field(
@@ -165,7 +183,15 @@ class MarkdownChunk(BaseModel):
     metadata: dict[str, Any] = Field(
         default_factory=dict, description="LangChain markdown metadata"
     )
-    chunk_id: str = Field(..., description="Deterministic chunk identifier")
+    header_path: str = Field("", description="Section path, e.g. 'Guide > Install'")
+    chunk_id: str = Field(..., description="Deterministic, source-scoped chunk identifier")
+    chunk_index: int = Field(0, ge=0, description="0-based position in the document")
+    chunk_total: int = Field(0, ge=0, description="Number of chunks in the document")
+    source: Optional[str] = Field(None, description="Source URL or kvs://KEY; null for pasted text")
+    document_hash: str = Field("", description="Fingerprint of the converted document")
+    embedding_text: str = Field(
+        "", description="header_path and content joined by a blank line, ready to embed"
+    )
     char_count: int = Field(..., ge=0, description="Number of characters in content")
     token_count: int = Field(..., ge=0, description="Estimated token count in content")
 

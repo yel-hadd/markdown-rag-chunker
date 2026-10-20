@@ -15,12 +15,17 @@ import posixpath
 from typing import Any, AsyncIterable, Awaitable, Callable
 from urllib.parse import urlsplit
 
+import tiktoken
 from langchain_text_splitters import (
     MarkdownHeaderTextSplitter,
     RecursiveCharacterTextSplitter,
 )
 
 from .models import MarkdownChunk, MarkdownSplitterInput
+
+#: Recursive split boundaries, coarse to fine: paragraphs, lines, CJK and
+#: Latin sentence ends, then words and characters.
+_SEPARATORS = ["\n\n", "\n", "。", "！", "？", "；", ". ", " ", ""]
 
 #: Length (hex characters) of the short hashes exposed in output records.
 _SHORT_HASH_LENGTH = 16
@@ -52,7 +57,49 @@ def cache_record_key(params: MarkdownSplitterInput, doc_hash: str) -> str:
         if params.input_mode == "file"
         else f"hash:{doc_hash}"
     )
-    return "state-" + hashlib.sha256(source.encode("utf-8")).hexdigest()[:24]
+    identity = json.dumps([params.cache_namespace, params.kvs_store or "", source])
+    return "state-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+
+
+#: Retries for transient download failures, and the longest wait honoured.
+_MAX_RETRIES = 2
+_MAX_RETRY_WAIT_SECONDS = 5.0
+
+
+def retry_delay(status: int, retry_after: str | None, attempt: int) -> float | None:
+    """Seconds to wait before retrying a download, or ``None`` to give up.
+
+    Only rate limiting (429) and server errors (5xx) are transient. Waits
+    back off exponentially (1 s, 2 s) or follow a numeric ``Retry-After``,
+    capped so a slow server cannot burn the run's time and compute.
+    """
+    if attempt >= _MAX_RETRIES or not (status == 429 or 500 <= status < 600):
+        return None
+    try:
+        wait = float(retry_after) if retry_after else 2.0**attempt
+    except ValueError:
+        wait = 2.0**attempt
+    return min(wait, _MAX_RETRY_WAIT_SECONDS)
+
+
+def http_error_message(status: int, url: str) -> str:
+    """Actionable message for a failed download."""
+    if status in (401, 403, 429):
+        return (
+            f"The source returned HTTP {status} (blocked or rate-limited): {url}. "
+            "Retry with use_apify_proxy: true or your own proxy_url."
+        )
+    return f"The source returned HTTP {status}: {url}. Check that the URL is public."
+
+
+def validation_error_message(error: Any) -> str:
+    """One-line summary of a pydantic ValidationError, one clause per field."""
+    parts = []
+    for item in error.errors():
+        message = str(item.get("msg", "")).removeprefix("Value error, ")
+        field = ".".join(str(part) for part in item.get("loc", ()))
+        parts.append(f"{field}: {message}" if field else message)
+    return "Invalid input: " + "; ".join(parts)
 
 
 async def read_capped(parts: AsyncIterable[bytes], limit: int) -> bytes:
@@ -117,10 +164,23 @@ def split_config_fingerprint(params: MarkdownSplitterInput) -> str:
                 "headers_to_split_on": params.headers_to_split_on,
                 "strip_headers": params.strip_headers,
                 "max_chunk_chars": params.max_chunk_chars,
+                "max_chunk_tokens": params.max_chunk_tokens,
+                "tokenizer": params.tokenizer,
             },
             sort_keys=True,
         ).encode("utf-8")
     )
+
+
+@functools.cache
+def _encoding(name: str) -> tiktoken.Encoding:
+    """Load a tiktoken encoding once (files are baked into the image)."""
+    return tiktoken.get_encoding(name)
+
+
+def count_tokens(text: str, tokenizer: str) -> int:
+    """Exact token count of ``text`` for a tiktoken encoding name."""
+    return len(_encoding(tokenizer).encode(text, disallowed_special=())) if text else 0
 
 
 def split_documents(params: MarkdownSplitterInput, markdown_text: str) -> list[Any]:
@@ -128,8 +188,9 @@ def split_documents(params: MarkdownSplitterInput, markdown_text: str) -> list[A
 
     Maps each header level to its ``Header N`` metadata key, drops sections
     whose content ends up empty (a header with no body must not become a
-    billed zero-character chunk), re-splits **only** oversized sections when
-    ``max_chunk_chars`` is set (10% overlap), and enforces ``max_chunks``.
+    billed zero-character chunk), re-splits **only** sections over the size
+    cap (``max_chunk_chars`` if set, else ``max_chunk_tokens``; 10% overlap),
+    and enforces ``max_chunks``.
     """
     headers = [(h, f"Header {h.count('#')}") for h in params.headers_to_split_on]
     documents = MarkdownHeaderTextSplitter(
@@ -138,13 +199,18 @@ def split_documents(params: MarkdownSplitterInput, markdown_text: str) -> list[A
     documents = [d for d in documents if (d.page_content or "").strip()]
 
     if params.max_chunk_chars:
-        cap = params.max_chunk_chars
+        cap: int | None = params.max_chunk_chars
+        measure: Callable[[str], int] = len
+    else:
+        cap = params.max_chunk_tokens
+        measure = functools.partial(count_tokens, tokenizer=params.tokenizer)
+
+    if cap:
+        sizes = [measure(d.page_content or "") for d in documents]
         # Lower bound on the final count: an oversized section needs at least
-        # ceil(len / cap) pieces. Failing here avoids building a huge list of
+        # ceil(size / cap) pieces. Failing here avoids building a huge list of
         # documents (and their metadata copies) just to reject it.
-        minimum = sum(
-            max(1, math.ceil(len(d.page_content or "") / cap)) for d in documents
-        )
+        minimum = sum(max(1, math.ceil(size / cap)) for size in sizes)
         if minimum > params.max_chunks:
             raise ValueError(
                 f"Chunk count would be at least {minimum}, which exceeds "
@@ -154,11 +220,13 @@ def split_documents(params: MarkdownSplitterInput, markdown_text: str) -> list[A
         resizer = RecursiveCharacterTextSplitter(
             chunk_size=cap,
             chunk_overlap=overlap,
-            separators=["\n\n", "\n", " ", ""],
+            separators=_SEPARATORS,
+            keep_separator="end",
+            length_function=measure,
         )
         resized: list[Any] = []
-        for document in documents:
-            if len(document.page_content or "") <= cap:
+        for document, size in zip(documents, sizes):
+            if size <= cap:
                 resized.append(document)
             else:
                 resized.extend(resizer.split_documents([document]))
@@ -171,37 +239,64 @@ def split_documents(params: MarkdownSplitterInput, markdown_text: str) -> list[A
     return documents
 
 
-def format_chunks(documents: list[Any]) -> list[MarkdownChunk]:
+def header_path(metadata: dict[str, Any]) -> str:
+    """Readable section path, e.g. ``"Guide > Install > Windows"``.
+
+    Ordered by header level (``Header 1``, ``Header 2``, …), not by dict
+    order; empty when the chunk sits above the first header.
+    """
+    levels = sorted(
+        (int(key.removeprefix("Header ")), str(value))
+        for key, value in metadata.items()
+        if key.startswith("Header ") and key.removeprefix("Header ").isdigit()
+    )
+    return " > ".join(value for _, value in levels)
+
+
+def format_chunks(
+    documents: list[Any],
+    source: str | None = None,
+    document_hash: str = "",
+    tokenizer: str = "cl100k_base",
+) -> list[MarkdownChunk]:
     """Convert LangChain documents into ``MarkdownChunk`` output records.
 
-    Each chunk gets a deterministic ``chunk_id`` — the first 16 hex
-    characters of the SHA-256 over the sorted-key JSON of its content and
-    metadata — so re-running the same input yields the same IDs and
-    downstream upserts stay idempotent. Repeats of an identical chunk also
-    hash their occurrence number, so every pushed chunk has a unique ID.
+    Each chunk gets a deterministic ``chunk_id``: the first 16 hex
+    characters of the SHA-256 over the sorted-key JSON of its scope, content
+    and metadata. The scope is the source (URL / ``kvs://KEY``), or the
+    document hash for pasted text, so identical sections in different
+    documents never share an ID, while untouched sections keep theirs when
+    another part of the same file changes. Repeats of an identical chunk
+    within a document also hash their occurrence number. ``token_count`` is
+    an exact count with ``tokenizer``.
     """
+    scope = source or f"text:{document_hash}"
     chunks: list[MarkdownChunk] = []
     seen: dict[str, int] = {}
-    for doc in documents:
+    for index, doc in enumerate(documents):
         content = doc.page_content or ""
         metadata = doc.metadata or {}
-        payload: dict[str, Any] = {"content": content, "metadata": metadata}
+        payload: dict[str, Any] = {"scope": scope, "content": content, "metadata": metadata}
         identity = json.dumps(payload, ensure_ascii=True, sort_keys=True)
         occurrence = seen.get(identity, 0)
         seen[identity] = occurrence + 1
         if occurrence:
             payload["occurrence"] = occurrence
         hash_input = json.dumps(payload, ensure_ascii=True, sort_keys=True).encode("utf-8")
-        chunk_id = hashlib.sha256(hash_input).hexdigest()[:16]
-        char_count = len(content)
-        token_count = math.ceil(char_count / 4) if char_count else 0
+        path = header_path(metadata)
         chunks.append(
             MarkdownChunk(
                 content=content,
                 metadata=metadata,
-                chunk_id=chunk_id,
-                char_count=char_count,
-                token_count=token_count,
+                header_path=path,
+                embedding_text=f"{path}\n\n{content}" if path else content,
+                chunk_id=hashlib.sha256(hash_input).hexdigest()[:16],
+                chunk_index=index,
+                chunk_total=len(documents),
+                source=source,
+                document_hash=document_hash,
+                char_count=len(content),
+                token_count=count_tokens(content, tokenizer),
             )
         )
     return chunks
@@ -313,5 +408,8 @@ def convert_to_markdown(raw_bytes: bytes, content_type: str, url: str | None = N
     )
     markdown_text = result.text_content if result else None
     if markdown_text is None or not markdown_text.strip():
-        raise ValueError("Converted file content is empty.")
+        raise ValueError(
+            "Converted file content is empty. Scanned PDFs and images contain no "
+            "text layer; run OCR first."
+        )
     return markdown_text

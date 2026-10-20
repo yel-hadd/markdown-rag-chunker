@@ -19,7 +19,7 @@ In Apify Console: Actor → `Publishing` → `Monetization` → `Change` → Pay
 
 | Event name | Trigger | FREE | BRONZE | SILVER | GOLD/PLATINUM/DIAMOND |
 | --- | --- | --- | --- | --- | --- |
-| `apify-actor-start` | Auto-charged once per run (one event per GB of memory; max memory is 512 MB, so always one) | `$0.001` | `$0.001` | `$0.001` | `$0.001` |
+| `apify-actor-start` | Auto-charged at run start, one event per GB of memory (default 1024 MB: one event; max 4096 MB: four) | `$0.001` | `$0.001` | `$0.001` | `$0.001` |
 | `apify-default-dataset-item` | Auto-charged per pushed dataset item — one item per chunk | `$0.0008` | `$0.0008` | `$0.0007` | `$0.0006` |
 
 Users see **$0.80 per 1,000 chunks + $0.001 per run** at the FREE/BRONZE tier.
@@ -85,10 +85,11 @@ Markdown hash, which still skips splitting and pushing.
   the 2026-10 test runs.
 
 ## Runtime hardening settings
-- `defaultMemoryMbytes`: `256`
-- `minMemoryMbytes`: `128`
-- `maxMemoryMbytes`: `512`
-- `max_input_chars` default: `500000`
+- `defaultMemoryMbytes`: `1024` (CPU scales with memory, ~1 core per 4 GB; at 256 MB a 300-page PDF converted for 825 s)
+- `minMemoryMbytes`: `256`
+- `maxMemoryMbytes`: `4096`
+- Console default run timeout: `600` s
+- `max_input_chars` default: `2000000`
 - `max_chunks` default: `5000`
 
 ## Rollout checklist

@@ -4,10 +4,12 @@ This is the only module that touches Apify or the network; everything else
 lives in pure, injectable functions (see ``processing.py`` and ``models.py``).
 """
 
+import asyncio
 import time
 
 from apify import Actor
 from curl_cffi.requests import AsyncSession
+from pydantic import ValidationError
 
 from .models import MarkdownSplitterInput, ProcessingMetrics
 from .processing import (
@@ -15,11 +17,14 @@ from .processing import (
     cache_record_key,
     document_hash,
     format_chunks,
+    http_error_message,
     read_capped,
     resolve_markdown_text,
+    retry_delay,
     source_fingerprint,
     split_config_fingerprint,
     split_documents,
+    validation_error_message,
 )
 
 #: Named key-value store (in the run user's account) holding one
@@ -61,12 +66,29 @@ async def main():
                 # anti-bot filters (e.g. Wikipedia 403s python-httpx) succeed.
                 # The body is streamed so oversized files fail before they
                 # fill memory, with or without a Content-Length header.
+                # 90 s covers large files from slow hosts (25 MB at ~300 KB/s).
                 async with AsyncSession(
-                    impersonate="chrome", timeout=30, proxy=fetch_proxy
+                    impersonate="chrome", timeout=90, proxy=fetch_proxy
                 ) as session:
-                    response = await session.get(url, stream=True)
+                    # Rate limits (429) and server errors (5xx) are retried
+                    # briefly; see processing.retry_delay for the policy.
+                    attempt = 0
+                    while True:
+                        response = await session.get(url, stream=True)
+                        wait = retry_delay(
+                            response.status_code, response.headers.get("retry-after"), attempt
+                        )
+                        if wait is None:
+                            break
+                        await response.aclose()
+                        Actor.log.warning(
+                            f"HTTP {response.status_code} from the source; retrying in {wait:.0f} s."
+                        )
+                        await asyncio.sleep(wait)
+                        attempt += 1
                     try:
-                        response.raise_for_status()
+                        if response.status_code >= 400:
+                            raise ValueError(http_error_message(response.status_code, url))
                         declared = response.headers.get("content-length", "")
                         if declared.isdigit() and int(declared) > _MAX_DOWNLOAD_BYTES:
                             raise ValueError(
@@ -173,7 +195,12 @@ async def main():
 
             # Split Markdown (header-aware first pass, cap-aware second
             # pass, max_chunks enforced) and format one record per chunk.
-            chunks = format_chunks(split_documents(params, markdown_text))
+            chunks = format_chunks(
+                split_documents(params, markdown_text),
+                source=source if params.input_mode == "file" else None,
+                document_hash=doc_hash,
+                tokenizer=params.tokenizer,
+            )
 
             # One dataset item per chunk: users pay per chunk (matches the
             # published pay-per-event pricing). When the user's maximum
@@ -222,6 +249,13 @@ async def main():
                     Actor.log.warning(f"Cache write skipped: {exc}")
 
         except Exception as e:
-            error_msg = f"Actor failed: {str(e)}"
+            error_msg = (
+                validation_error_message(e) if isinstance(e, ValidationError) else str(e)
+            )
             Actor.log.error(error_msg)
+            # Pipelines read OUTPUT; give them a structured failure too (unbilled).
+            try:
+                await Actor.set_value("OUTPUT", {"failed": True, "error": error_msg})
+            except Exception as exc:
+                Actor.log.warning(f"Could not write OUTPUT: {exc}")
             await Actor.fail(exception=e, status_message=error_msg)

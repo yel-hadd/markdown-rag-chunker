@@ -20,6 +20,10 @@ RUN echo "Python version:" \
     && echo "All installed Python packages:" \
     && pip freeze
 
+# Bake the tokenizer files into the image so runs never download them.
+ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken
+RUN python -c "import tiktoken; [tiktoken.get_encoding(n) for n in ('cl100k_base', 'o200k_base')]"
+
 # Next, copy the remaining files and directories with the source code.
 # Since we do this after installing the dependencies, quick build will be really fast
 # for most source file changes.

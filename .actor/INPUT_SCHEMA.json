@@ -7,9 +7,9 @@
     "markdown_file": {
       "title": "Document URL",
       "type": "string",
-      "description": "HTTP(S) URL of a PDF, webpage (HTML), Word, Excel, PowerPoint, EPUB, CSV, JSON, XML, Markdown or text file, up to 25 MB. Or kvs://KEY to read a record from the store selected under Key-value store.",
+      "description": "One document per run: the HTTP(S) URL of a PDF, webpage (HTML), Word, Excel, PowerPoint, EPUB, CSV, JSON, XML, Markdown or text file, up to 25 MB. To chunk several documents, start one run per URL. Or kvs://KEY to read a record from the store selected under Key-value store.",
       "editor": "textfield",
-      "prefill": "https://en.wikipedia.org/wiki/Giant_panda"
+      "prefill": "https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/README.md"
     },
     "markdown_text": {
       "title": "Markdown text",
@@ -49,10 +49,7 @@
       "default": [
         "#",
         "##",
-        "###",
-        "####",
-        "#####",
-        "######"
+        "###"
       ],
       "prefill": [
         "#",
@@ -62,20 +59,42 @@
       "sectionCaption": "Chunking strategy",
       "sectionDescription": "Header-aware splitting first, then a size cap for oversized sections only."
     },
-    "max_chunk_chars": {
-      "title": "Max chunk size (characters)",
+    "max_chunk_tokens": {
+      "title": "Max chunk size (tokens)",
       "type": "integer",
-      "description": "Sections longer than this are re-split on paragraph, line and word boundaries with 10% overlap; shorter sections stay intact. The default 1600 is about 400 tokens, a size that retrieves well in published chunking benchmarks.",
-      "minimum": 100,
-      "maximum": 100000,
-      "default": 1600,
+      "description": "Sections longer than this many tokens are re-split on paragraph, line, sentence and word boundaries with 10% overlap; shorter sections stay whole. 512 suits modern embedding models (OpenAI, Voyage, Cohere, Gemini, Jina, Qwen3); use 256 for short factual lookups and 1024 for long analytical answers. Leave empty for no cap.",
+      "minimum": 50,
+      "maximum": 8192,
+      "default": 512,
       "nullable": true
+    },
+    "tokenizer": {
+      "title": "Tokenizer",
+      "type": "string",
+      "description": "Encoding used to measure chunks and fill token_count. cl100k_base matches OpenAI text-embedding-3 models; o200k_base matches GPT-4o-era models and counts non-English text more compactly.",
+      "enum": [
+        "cl100k_base",
+        "o200k_base"
+      ],
+      "enumTitles": [
+        "cl100k_base (OpenAI text-embedding-3)",
+        "o200k_base (GPT-4o family)"
+      ],
+      "default": "cl100k_base"
     },
     "strip_headers": {
       "title": "Move headers to metadata",
       "type": "boolean",
       "description": "On: header text lives only in each chunk's metadata (best for embeddings). Off: chunks also keep their header line (best for human-readable output).",
       "default": true
+    },
+    "max_chunk_chars": {
+      "title": "Max chunk size (characters)",
+      "type": "integer",
+      "description": "Optional. Cap chunks by characters instead of tokens; when set, it overrides Max chunk size (tokens).",
+      "minimum": 100,
+      "maximum": 100000,
+      "nullable": true
     },
     "skip_if_unchanged": {
       "title": "Skip if unchanged",
@@ -84,11 +103,18 @@
       "default": false,
       "sectionCaption": "Recurring runs and limits"
     },
+    "cache_namespace": {
+      "title": "Cache namespace",
+      "type": "string",
+      "description": "Optional. Keeps Skip if unchanged state separate for pipelines that chunk the same document, e.g. 'dev' and 'prod', so one never skips the other.",
+      "editor": "textfield",
+      "maxLength": 100
+    },
     "max_input_chars": {
       "title": "Max document size (characters)",
       "type": "integer",
       "description": "Runs whose converted document is longer than this fail fast, before any chunks are billed.",
-      "default": 500000,
+      "default": 2000000,
       "minimum": 1,
       "maximum": 5000000
     },
