@@ -2,7 +2,7 @@
 
 [Try it in Apify Console](https://console.apify.com/actors/84h4GucI0gbo1SrN7?fpr=use-apify). The form is prefilled with this Actor's own README, so your first run is one click; then paste your document's URL.
 
-<img src="https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/docs/images/markdown-rag-chunker-how-it-works.png" alt="How Markdown RAG Chunker works: a PDF, Word or HTML document is converted to Markdown, split on its headings, capped at 512 tokens, and output as one dataset item per chunk">
+<img src="https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/docs/images/markdown-rag-chunker-how-it-works.png?v=2" alt="How Markdown RAG Chunker works: a PDF, Word or HTML document is converted to Markdown, split on its headings, capped at 512 tokens, and output as one dataset item per chunk">
 
 **Open source (MIT):** [github.com/yel-hadd/markdown-rag-chunker](https://github.com/yel-hadd/markdown-rag-chunker). Issues and pull requests welcome.
 
@@ -37,7 +37,7 @@ Split on the document's headings first, then cap only the sections that are too 
 | Predictable chunk size | Yes | Yes | Yes, capped at 512 real tokens by default |
 | Short sections kept whole | No | No | Yes |
 
-<img src="https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/docs/images/header-aware-vs-fixed-size-chunking.png" alt="Fixed-size chunking cuts across document sections, while header-aware chunking keeps each chunk inside one section and re-splits only oversized sections with overlap">
+<img src="https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/docs/images/header-aware-vs-fixed-size-chunking.png?v=2" alt="Fixed-size chunking cuts across document sections, while header-aware chunking keeps each chunk inside one section and re-splits only oversized sections with overlap">
 
 ## How to chunk a document for RAG
 
@@ -71,7 +71,7 @@ This Actor uses [pay-per-event pricing](https://docs.apify.com/platform/actors/p
 
 The input form in Apify Console, prefilled with this README and the default chunking settings:
 
-<a href="https://console.apify.com/actors/84h4GucI0gbo1SrN7?fpr=use-apify"><img src="https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/docs/images/markdown-rag-chunker-input-form.png" alt="Markdown RAG Chunker input form in Apify Console with a document URL and the chunking strategy settings" width="75%"></a>
+<a href="https://console.apify.com/actors/84h4GucI0gbo1SrN7?fpr=use-apify"><img src="https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/docs/images/markdown-rag-chunker-input-form.png?v=2" alt="Markdown RAG Chunker input form in Apify Console with a document URL and the chunking strategy settings" width="75%"></a>
 
 The same settings as JSON for the API, here for a Wikipedia article:
 
@@ -103,7 +103,7 @@ Send `markdown_file` (a URL) or `markdown_text` (Markdown); each run chunks one 
 
 Each chunk is one dataset item. In the Console's **Chunks** view of the prefilled run on this README (40 chunks in about 10 seconds when the screenshot was taken), each row shows the chunk's section, token count and content:
 
-<img src="https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/docs/images/markdown-rag-chunker-output-chunks.png" alt="Markdown RAG Chunker output in Apify Console: a table of chunks with section header path, token count, content and chunk ID">
+<img src="https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/docs/images/markdown-rag-chunker-output-chunks.png?v=2" alt="Markdown RAG Chunker output in Apify Console: a table of chunks with section header path, token count, content and chunk ID">
 
 A real chunk from the Giant panda input above, as JSON (`content` shortened):
 
