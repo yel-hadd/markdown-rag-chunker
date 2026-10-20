@@ -37,6 +37,37 @@ def document_hash(markdown_text: str) -> str:
     return _short_hash(markdown_text.encode("utf-8"))
 
 
+def source_fingerprint(raw_bytes: bytes, content_type: str) -> str:
+    """Fingerprint of a fetched file before conversion.
+
+    Lets change detection skip the (expensive) conversion when the raw
+    download is byte-identical. The content type is included because it
+    selects the converter; JSON encoding keeps the two fields unambiguous.
+    """
+    header = json.dumps(content_type).encode("utf-8")
+    return _short_hash(header + b"\n" + raw_bytes)
+
+
+def cache_hit(
+    state: Any,
+    split_config: str,
+    *,
+    document_hash: str | None = None,
+    source_hash: str | None = None,
+) -> bool:
+    """Whether a cached change-detection state matches the current run.
+
+    Split settings must match, plus either the raw source fingerprint
+    (checked before conversion) or the converted document hash.
+    """
+    if not isinstance(state, dict) or state.get("split_config") != split_config:
+        return False
+    return any(
+        value is not None and state.get(key) == value
+        for key, value in (("source_hash", source_hash), ("document_hash", document_hash))
+    )
+
+
 def split_config_fingerprint(params: MarkdownSplitterInput) -> str:
     """Fingerprint of every input that affects how text is split.
 

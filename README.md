@@ -12,8 +12,8 @@
 - **Gives every chunk a deterministic `chunk_id`**: the same input always produces the same IDs, so upserts into [Pinecone](https://www.pinecone.io/), [Qdrant](https://qdrant.tech/), [Weaviate](https://weaviate.io/), [pgvector](https://github.com/pgvector/pgvector), or any vector store are idempotent and deduplicable
 - **Estimates tokens per chunk** (`token_count`, ~1 token per 4 characters) for embedding budget planning
 - **Fetches like a real browser**: remote downloads use [curl_cffi](https://github.com/lexiforest/curl_cffi) with a genuine Chrome TLS/HTTP2 fingerprint, so sites that block plain HTTP clients (Wikipedia 403s `python-httpx`) still work — with optional proxy support on top
-- **Skips unchanged documents**: every run returns a `document_hash`, and `skip_if_unchanged` makes recurring runs of the same document cost a fraction of a cent instead of the full per-chunk price
-- **Costs nothing when idle**: pay-per-event pricing, $0.80 per 1,000 chunks on the FREE plan
+- **Skips unchanged documents**: every run returns a `document_hash`, and `skip_if_unchanged` makes recurring runs of an unchanged document cost only the $0.001 run start instead of the full per-chunk price — unchanged files are not even re-converted
+- **Costs nothing when idle**: pay-per-event pricing, $0.80 per 1,000 chunks plus $0.001 per run on the FREE plan, no subscription
 
 ## Supported input formats
 
@@ -36,7 +36,7 @@ Provide files as an `http(s)://` URL or as an [Apify Key-Value Store](https://do
 4. If the source site blocks bots, enable **Use Apify Proxy** or enter your own **Proxy URL** (free).
 5. Press **Start**. Each chunk lands in the default dataset as its own item; run totals appear in the run's **Output**.
 
-Then pipe each item's `content` into your embedding model and store `chunk_id` and `metadata` next to the vector. For scheduled or recurring pipelines, turn on **Skip if Unchanged** — re-runs of an unchanged document push nothing and cost a fraction of a cent. The full input form is documented under the [Input](https://apify.com/codepoetry/markdown-rag-chunker/input-schema?fpr=use-apify) tab; field types live under [Output](https://apify.com/codepoetry/markdown-rag-chunker/output-schema?fpr=use-apify).
+Then pipe each item's `content` into your embedding model and store `chunk_id` and `metadata` next to the vector. For scheduled or recurring pipelines, turn on **Skip if Unchanged** — re-runs of an unchanged document push nothing and cost only the $0.001 run start. The full input form is documented under the [Input](https://apify.com/codepoetry/markdown-rag-chunker/input-schema?fpr=use-apify) tab; field types live under [Output](https://apify.com/codepoetry/markdown-rag-chunker/output-schema?fpr=use-apify).
 
 ## Quick start with the API
 
@@ -121,35 +121,36 @@ Run-level metrics come back as the run's named **Output** (never billed as datas
 
 ## How much does RAG chunking cost?
 
-This Actor uses [pay-per-event pricing](https://docs.apify.com/platform/actors/publishing/monetize/pay-per-event): **you pay per chunk produced**, at the same rate for every input format.
+This Actor uses [pay-per-event pricing](https://docs.apify.com/platform/actors/publishing/monetize/pay-per-event): **you pay per chunk produced**, at the same rate for every input format, plus a small flat fee per run.
 
 - **$0.80 per 1,000 chunks** on the FREE and BRONZE plans (lower on higher plans — see the [Pricing](https://apify.com/codepoetry/markdown-rag-chunker/pricing?fpr=use-apify) tab)
-- Each run also incurs Apify's standard actor-start event (a fraction of a cent)
-- **Re-runs of unchanged documents can cost ~nothing**: enable **Skip if Unchanged** and a run that detects no change pushes no chunks and is not billed for any
+- **$0.001 per run** (the actor-start event), charged once per run of up to 1 GB memory
+- Compute, storage and proxy usage are **included** in these prices — nothing else is billed
+- **Re-runs of unchanged documents cost only the $0.001 run start**: enable **Skip if Unchanged** and a run that detects no change pushes no chunks and is not billed for any
 - Run metrics are returned as the named Output and are **not** billed
 - No monthly fee — unused months cost nothing
 
 | Input | Chunks produced | Approx. cost |
 | --- | --- | --- |
-| 1-page Markdown snippet | 3 | $0.0024 |
-| 10-page HTML article | 15 | $0.012 |
-| 40-page PDF | 60 | $0.048 |
-| 200-page technical manual | 300 | $0.24 |
+| 1-page Markdown snippet | 3 | $0.0034 |
+| 10-page HTML article | 15 | $0.013 |
+| 40-page PDF | 60 | $0.049 |
+| 200-page technical manual | 300 | $0.241 |
 
 ### Proxies and fair billing
 
 Fetches go direct by default (free). In `file` mode you can opt into either:
 
-- **`proxy_url` — bring your own proxy, free**: `http://user:pass@host:8080`, `https://host:8080`, or `socks5://host:1080`. No Apify proxy charges; you pay only the per-chunk price.
-- **`use_apify_proxy` — Apify Proxy (datacenter)**: for sites that block datacenter IPs or rate-limit you. Billed by Apify as standard platform usage on your plan — the same rate as any other Actor's traffic, no markup from us.
+- **`proxy_url` — bring your own proxy**: `http://user:pass@host:8080`, `https://host:8080`, or `socks5://host:1080`. No Apify proxy involved.
+- **`use_apify_proxy` — Apify Proxy (datacenter)**: for sites that block direct downloads or rate-limit you. Proxy traffic is included in the price; you are not billed for it separately.
 
-The two options are mutually exclusive; neither changes chunk pricing.
+The two options are mutually exclusive; neither changes the price.
 
 ## Markdown RAG Chunker vs Firecrawl and plain text splitters
 
 | | Markdown RAG Chunker | Firecrawl | Fixed-size splitters |
 | --- | --- | --- | --- |
-| Pricing | Pay per chunk ($0.80/1k), no subscription | Monthly subscription + credits | Free (DIY) |
+| Pricing | Pay per chunk ($0.80/1k + $0.001/run), no subscription | Monthly subscription + credits | Free (DIY) |
 | Formats | PDF, HTML, DOCX, XLSX, PPTX, EPUB, CSV, JSON, XML, MD | Web pages, PDF (scrape-centric) | Whatever you wire up |
 | Splitting | Header-aware + token-aware cap, header chain in metadata | Markdown + chunk endpoints | Fixed char/token windows, no structure |
 | Stable IDs for vector upserts | Built in | No | DIY |
@@ -190,7 +191,7 @@ Yes. Chunking is built on [LangChain text splitters](https://python.langchain.co
 
 ### Why is my dataset empty after a run?
 
-If **Skip if Unchanged** is on and the document (and split settings) haven't changed since the last run, the Actor pushes nothing and reports `unchanged: true` with the cached `chunk_count` in the run Output — that run costs a fraction of a cent instead of the per-chunk price. Turn the toggle off when you want the chunks re-pushed.
+If **Skip if Unchanged** is on and the document (and split settings) haven't changed since the last run, the Actor pushes nothing and reports `unchanged: true` with the cached `chunk_count` in the run Output — that run costs only the $0.001 run start instead of the per-chunk price. Turn the toggle off when you want the chunks re-pushed.
 
 ### How do I avoid paying for documents that haven't changed?
 
@@ -205,6 +206,11 @@ It's a fast estimate (~1 token per 4 characters) for budget planning and guardra
 The [API](https://apify.com/codepoetry/markdown-rag-chunker/api?fpr=use-apify), [Python](https://apify.com/codepoetry/markdown-rag-chunker/api/python?fpr=use-apify), [JavaScript](https://apify.com/codepoetry/markdown-rag-chunker/api/javascript?fpr=use-apify), [CLI](https://apify.com/codepoetry/markdown-rag-chunker/api/cli?fpr=use-apify), [OpenAPI](https://apify.com/codepoetry/markdown-rag-chunker/api/openapi?fpr=use-apify), and [MCP](https://apify.com/codepoetry/markdown-rag-chunker/api/mcp?fpr=use-apify) tabs on this Actor's page include ready-to-paste code with the correct Actor ID and input shape for every supported client.
 
 ## What's new
+
+### v1.3
+
+- **Cheaper, faster change detection**: with **Skip if Unchanged**, a remote file whose bytes haven't changed is no longer re-converted at all — the run ends right after the download
+- Simple, all-inclusive pricing: $0.80 per 1,000 chunks plus $0.001 per run; compute, storage and Apify Proxy traffic are included
 
 ### v1.2
 

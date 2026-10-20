@@ -12,9 +12,11 @@ from curl_cffi.requests import AsyncSession
 
 from .models import MarkdownSplitterInput, ProcessingMetrics
 from .processing import (
+    cache_hit,
     document_hash,
     format_chunks,
     resolve_markdown_text,
+    source_fingerprint,
     split_config_fingerprint,
     split_documents,
 )
@@ -23,7 +25,7 @@ from .processing import (
 _CACHE_RECORD_KEY = "state"
 
 
-def _cache_store_name(params: MarkdownSplitterInput, doc_hash: str) -> str:
+def _cache_store_name(params: MarkdownSplitterInput, doc_hash: str | None) -> str:
     """Name of the per-source cache store for change detection.
 
     File-mode sources are keyed by their URL/`kvs://` string so that an
@@ -47,7 +49,7 @@ async def main():
             params = MarkdownSplitterInput(**input_data)
 
             # Resolve the proxy for remote fetches: either the user's own
-            # (free) or Apify Proxy (billed to the user as platform usage).
+            # or Apify Proxy (platform usage, included in the event prices).
             fetch_proxy: str | None = None
             if params.input_mode == "file":
                 if params.proxy_url:
@@ -99,51 +101,78 @@ async def main():
                     )
                 return value
 
-            markdown_text, input_file_type = await resolve_markdown_text(
-                params=params,
-                fetch_remote=fetch_remote,
-                load_kvs=load_kvs,
-            )
-
-            doc_hash = document_hash(markdown_text)
             config_fingerprint = split_config_fingerprint(params)
 
-            # Change detection: with skip_if_unchanged, a cached state whose
-            # document hash and split settings both match skips splitting and
-            # pushing entirely — the run then costs only the start event.
-            # Cache failures never fail the run; they just re-process.
-            cached_state: dict | None = None
-            cache_store = None
-            if params.skip_if_unchanged:
-                try:
-                    cache_store = await Actor.open_key_value_store(
-                        name=_cache_store_name(params, doc_hash)
-                    )
-                    cached_state = await cache_store.get_value(_CACHE_RECORD_KEY)
-                except Exception as exc:
-                    Actor.log.warning(f"Cache read skipped: {exc}")
-
-            if (
-                isinstance(cached_state, dict)
-                and cached_state.get("document_hash") == doc_hash
-                and cached_state.get("split_config") == config_fingerprint
-            ):
+            async def finish_unchanged(
+                state: dict, doc_hash: str, input_chars: int, input_file_type: str
+            ) -> None:
                 metrics = ProcessingMetrics(
                     input_mode=params.input_mode,
                     input_file_type=input_file_type,
-                    input_chars=len(markdown_text),
+                    input_chars=input_chars,
                     chunk_count=0,
                     elapsed_ms=int((time.perf_counter() - started_at) * 1000),
                     document_hash=doc_hash,
                     unchanged=True,
-                    cached_chunk_count=cached_state.get("chunk_count"),
+                    cached_chunk_count=state.get("chunk_count"),
                 )
                 await Actor.set_value("OUTPUT", metrics.model_dump(exclude_none=True))
                 Actor.log.info(
                     f"Document unchanged (document_hash={doc_hash}); skipped "
                     "chunking. No dataset items were pushed or billed."
                 )
-                return
+
+            async def read_cache(doc_hash: str | None) -> tuple[object, object]:
+                # Cache failures never fail the run; they just re-process.
+                try:
+                    store = await Actor.open_key_value_store(
+                        name=_cache_store_name(params, doc_hash)
+                    )
+                    return store, await store.get_value(_CACHE_RECORD_KEY)
+                except Exception as exc:
+                    Actor.log.warning(f"Cache read skipped: {exc}")
+                    return None, None
+
+            # Change detection (skip_if_unchanged) runs in two steps. File
+            # mode first compares the raw download, so an unchanged file
+            # skips conversion entirely; otherwise the converted Markdown
+            # hash is compared (catches pages whose bytes vary per fetch).
+            cache_store = None
+            cached_state: object = None
+            source_hash: str | None = None
+            payload: tuple[bytes, str] | None = None
+            source = (params.markdown_file or "").strip()
+            if params.input_mode == "file" and source.startswith(("https://", "http://")):
+                payload = await fetch_remote(source)
+                source_hash = source_fingerprint(*payload)
+                if params.skip_if_unchanged:
+                    cache_store, cached_state = await read_cache(None)
+                    if cache_hit(cached_state, config_fingerprint, source_hash=source_hash):
+                        # Not converted this run: report the cached document's stats.
+                        await finish_unchanged(
+                            cached_state,
+                            cached_state.get("document_hash", ""),
+                            cached_state.get("input_chars", 0),
+                            cached_state.get("input_file_type", "application/octet-stream"),
+                        )
+                        return
+
+            markdown_text, input_file_type = await resolve_markdown_text(
+                params=params,
+                # Reuse the download fetched above instead of fetching twice.
+                fetch_remote=(lambda _url: payload) if payload is not None else fetch_remote,
+                load_kvs=load_kvs,
+            )
+            doc_hash = document_hash(markdown_text)
+
+            if params.skip_if_unchanged:
+                if cache_store is None:
+                    cache_store, cached_state = await read_cache(doc_hash)
+                if cache_hit(cached_state, config_fingerprint, document_hash=doc_hash):
+                    await finish_unchanged(
+                        cached_state, doc_hash, len(markdown_text), input_file_type
+                    )
+                    return
 
             # Split Markdown (header-aware first pass, cap-aware second
             # pass, max_chunks enforced) and format one record per chunk.
@@ -174,8 +203,11 @@ async def main():
                         _CACHE_RECORD_KEY,
                         {
                             "document_hash": doc_hash,
+                            "source_hash": source_hash,
                             "split_config": config_fingerprint,
                             "chunk_count": len(chunks),
+                            "input_chars": len(markdown_text),
+                            "input_file_type": input_file_type,
                         },
                     )
                 except Exception as exc:

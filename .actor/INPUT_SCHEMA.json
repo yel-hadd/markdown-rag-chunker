@@ -66,7 +66,7 @@
     "skip_if_unchanged": {
       "title": "Skip if Unchanged",
       "type": "boolean",
-      "description": "Skip re-chunking when the source document and split settings are unchanged since the last run: nothing is pushed to the dataset and the run costs a fraction of a cent. The Output reports unchanged=true with the cached chunk count. Recommended for scheduled and recurring pipelines. First runs always process.",
+      "description": "Skip re-chunking when the source document and split settings are unchanged since the last run: nothing is pushed to the dataset and the run costs only the $0.001 run start; an unchanged remote file is not even re-converted. The Output reports unchanged=true with the cached chunk count. Recommended for scheduled and recurring pipelines. First runs always process.",
       "default": false
     },
     "max_input_chars": {
@@ -88,13 +88,13 @@
     "use_apify_proxy": {
       "title": "Use Apify Proxy",
       "type": "boolean",
-      "description": "Route the remote file fetch through Apify Proxy (datacenter). Billed by Apify as standard platform usage. Leave off for direct downloads. Only applies in file mode.",
+      "description": "Route the remote file fetch through Apify Proxy (datacenter). Proxy traffic is included in the price. Leave off for direct downloads. Only applies in file mode.",
       "default": false
     },
     "proxy_url": {
-      "title": "Custom Proxy URL (free)",
+      "title": "Custom Proxy URL",
       "type": "string",
-      "description": "Bring your own proxy for the file fetch: http://user:pass@host:8080, https://host:8080, or socks5://host:1080. Free of charge — no Apify proxy fees. Mutually exclusive with Use Apify Proxy. Only applies in file mode. Leave empty for a direct (free) fetch.",
+      "description": "Bring your own proxy for the file fetch: http://user:pass@host:8080, https://host:8080, or socks5://host:1080. No Apify proxy involved. Mutually exclusive with Use Apify Proxy. Only applies in file mode. Leave empty for a direct (free) fetch.",
       "editor": "textfield"
     }
   }

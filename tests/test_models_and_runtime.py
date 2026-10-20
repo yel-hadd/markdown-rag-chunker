@@ -10,10 +10,12 @@ from pydantic import ValidationError
 
 from src.models import MarkdownChunk, MarkdownSplitterInput, ProcessingMetrics
 from src.processing import (
+    cache_hit,
     convert_to_markdown,
     document_hash,
     format_chunks,
     resolve_markdown_text,
+    source_fingerprint,
     split_config_fingerprint,
     split_documents,
 )
@@ -421,6 +423,66 @@ class DocumentHashTests(unittest.TestCase):
 
     def test_empty_text_allowed(self) -> None:
         self.assertEqual(len(document_hash("")), 16)
+
+
+class SourceFingerprintTests(unittest.TestCase):
+    def test_same_bytes_and_type_same_fingerprint(self) -> None:
+        self.assertEqual(
+            source_fingerprint(b"%PDF-1.4", "application/pdf"),
+            source_fingerprint(b"%PDF-1.4", "application/pdf"),
+        )
+
+    def test_different_bytes_different_fingerprint(self) -> None:
+        self.assertNotEqual(
+            source_fingerprint(b"a", "text/html"), source_fingerprint(b"b", "text/html")
+        )
+
+    def test_content_type_changes_fingerprint(self) -> None:
+        # Conversion depends on the MIME type, so identical bytes served
+        # under a different type must not reuse the cached result.
+        self.assertNotEqual(
+            source_fingerprint(b"x", "text/html"), source_fingerprint(b"x", "text/plain")
+        )
+
+    def test_type_and_bytes_cannot_collide_by_concatenation(self) -> None:
+        self.assertNotEqual(
+            source_fingerprint(b"b", "text/a"), source_fingerprint(b"ab", "text/")
+        )
+
+    def test_is_16_lowercase_hex_chars(self) -> None:
+        self.assertRegex(source_fingerprint(b"x", "text/html"), r"^[0-9a-f]{16}$")
+
+
+class CacheHitTests(unittest.TestCase):
+    _STATE = {"document_hash": "d1", "source_hash": "s1", "split_config": "c1"}
+
+    def test_document_hash_match_is_a_hit(self) -> None:
+        self.assertTrue(cache_hit(self._STATE, "c1", document_hash="d1"))
+
+    def test_source_hash_match_is_a_hit(self) -> None:
+        self.assertTrue(cache_hit(self._STATE, "c1", source_hash="s1"))
+
+    def test_split_config_mismatch_is_a_miss(self) -> None:
+        self.assertFalse(cache_hit(self._STATE, "c2", document_hash="d1"))
+        self.assertFalse(cache_hit(self._STATE, "c2", source_hash="s1"))
+
+    def test_hash_mismatch_is_a_miss(self) -> None:
+        self.assertFalse(cache_hit(self._STATE, "c1", document_hash="other"))
+        self.assertFalse(cache_hit(self._STATE, "c1", source_hash="other"))
+
+    def test_no_hash_given_is_a_miss(self) -> None:
+        self.assertFalse(cache_hit(self._STATE, "c1"))
+
+    def test_state_without_source_hash_never_matches_source(self) -> None:
+        # States written before source hashing existed lack the key; None
+        # must not compare equal to a missing value.
+        legacy = {"document_hash": "d1", "split_config": "c1"}
+        self.assertFalse(cache_hit(legacy, "c1", source_hash=None))
+        self.assertFalse(cache_hit(legacy, "c1", source_hash="s1"))
+
+    def test_non_dict_state_is_a_miss(self) -> None:
+        for state in (None, "garbage", 42, ["d1"]):
+            self.assertFalse(cache_hit(state, "c1", document_hash="d1"))
 
 
 class SplitConfigFingerprintTests(unittest.TestCase):
