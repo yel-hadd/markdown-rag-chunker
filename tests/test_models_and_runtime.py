@@ -1302,6 +1302,29 @@ class SplitDocumentsTests(unittest.TestCase):
             {"Header 1": "Guide", "Header 2": "Install", "Header 3": "Windows"}, metas
         )
 
+    def test_heading_anchor_links_are_removed_from_metadata(self) -> None:
+        # Crawlers (e.g. Website Content Crawler) keep permalink anchors.
+        text = "# Guide[](https://x.dev/#guide)\nintro\n## Basic usage[](https://x.dev/#basic-usage)\nbody"
+        docs = split_documents(self._params(), text)
+        self.assertEqual(
+            docs[-1].metadata, {"Header 1": "Guide", "Header 2": "Basic usage"}
+        )
+
+    def test_linked_heading_text_is_kept_without_the_url(self) -> None:
+        text = "## [Install](https://x.dev/install) on [Linux](https://x.dev/linux)\nbody"
+        docs = split_documents(self._params(), text)
+        self.assertEqual(docs[0].metadata, {"Header 2": "Install on Linux"})
+
+    def test_heading_that_is_only_an_anchor_is_dropped_from_metadata(self) -> None:
+        text = "# Guide\nintro\n## [](https://x.dev/#a)\nbody"
+        docs = split_documents(self._params(), text)
+        self.assertEqual(docs[-1].metadata, {"Header 1": "Guide"})
+
+    def test_body_links_are_untouched(self) -> None:
+        text = "# Guide\nSee [docs](https://x.dev) and [](https://x.dev/#a)."
+        docs = split_documents(self._params(), text)
+        self.assertEqual(docs[0].page_content, "See [docs](https://x.dev) and [](https://x.dev/#a).")
+
     def test_sections_under_cap_pass_through_untouched(self) -> None:
         text = "# Short\nabc"
         docs = split_documents(

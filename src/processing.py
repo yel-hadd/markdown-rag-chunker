@@ -12,6 +12,7 @@ import inspect
 import json
 import math
 import posixpath
+import re
 from typing import Any, AsyncIterable, Awaitable, Callable
 from urllib.parse import urlsplit
 
@@ -29,6 +30,10 @@ from .models import MarkdownChunk, MarkdownSplitterInput
 #: preceding chunk; spaces start the next piece (" word"), which tokenizers
 #: count as one token, so merged sizes match the real token count.
 _SEPARATORS = ["\n\n", "\n", "(?<=[。！？；])", "(?<=[.!?] )", " ", ""]
+
+#: Markdown links ``[text](url)``, including empty permalink anchors
+#: (``[](https://site/#id)``) that crawlers keep inside headings.
+_LINK = re.compile(r"\[([^\]]*)\]\((?:[^()\s]|\([^()\s]*\))*\)")
 
 #: Length (hex characters) of the short hashes exposed in output records.
 _SHORT_HASH_LENGTH = 16
@@ -225,6 +230,8 @@ def split_documents(params: MarkdownSplitterInput, markdown_text: str) -> list[A
         headers_to_split_on=headers, strip_headers=params.strip_headers
     ).split_text(markdown_text)
     documents = [d for d in documents if (d.page_content or "").strip()]
+    for document in documents:
+        document.metadata = clean_header_metadata(document.metadata)
 
     if params.max_chunk_chars:
         cap: int | None = params.max_chunk_chars
@@ -275,6 +282,23 @@ def split_documents(params: MarkdownSplitterInput, markdown_text: str) -> list[A
             f"Chunk count {len(documents)} exceeds max_chunks ({params.max_chunks})."
         )
     return documents
+
+
+def clean_header_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
+    """Reduce Markdown links in heading values to their text.
+
+    ``## Usage[](https://site/#usage)`` becomes ``Usage`` and a heading that
+    is only an anchor is dropped, so ``header_path`` and ``embedding_text``
+    carry section names, not URLs.
+    """
+    cleaned: dict[str, Any] = {}
+    for key, value in metadata.items():
+        if isinstance(value, str) and key.startswith("Header "):
+            value = " ".join(_LINK.sub(r"\1", value).split())
+            if not value:
+                continue
+        cleaned[key] = value
+    return cleaned
 
 
 def header_path(metadata: dict[str, Any]) -> str:

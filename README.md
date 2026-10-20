@@ -393,6 +393,7 @@ Report bugs or request features in the [Issues](https://apify.com/codepoetry/mar
 - **Files up to 25 MB**, streamed with a hard size limit instead of a text-based estimate that rejected image-heavy PDFs
 - **Apify storage input fixed**: `kvs://KEY` now reads from a store you select
 - **Unique IDs for repeated sections** and honest Output when your maximum charge per run stops delivery
+- **Clean section names**: permalink anchors and links that crawlers leave in headings (`## Usage[](https://site/#usage)`) are reduced to their text in `metadata`, `header_path` and `embedding_text`
 - Simple, all-inclusive pricing: $0.80 per 1,000 chunks plus $0.001 per run
 
 ### v1.2
