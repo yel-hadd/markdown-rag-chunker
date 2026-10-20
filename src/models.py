@@ -35,6 +35,15 @@ class MarkdownSplitterInput(BaseModel):
             "to read a record from the store selected in kvs_store."
         ),
     )
+    source_id: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description=(
+            "Stable identifier for the document (e.g. the page URL of crawled "
+            "text). Scopes chunk_id, fills each chunk's source, and keys Skip if "
+            "unchanged. Defaults to the URL in file mode."
+        ),
+    )
     kvs_store: Optional[str] = Field(
         None,
         description=(
@@ -119,6 +128,11 @@ class MarkdownSplitterInput(BaseModel):
             if not re.fullmatch(r"#{1,6}", h):
                 raise ValueError(f"Invalid header format: {raw}. Use '#', '##', etc.")
         return normalised
+
+    @field_validator("source_id")
+    @classmethod
+    def blank_source_id_is_none(cls, v: Optional[str]) -> Optional[str]:
+        return (v or "").strip() or None
 
     @field_validator("proxy_url")
     @classmethod

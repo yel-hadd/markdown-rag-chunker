@@ -31,6 +31,13 @@
       ],
       "editor": "select"
     },
+    "source_id": {
+      "title": "Source ID",
+      "type": "string",
+      "description": "Optional stable ID for this document, e.g. the page URL when you paste crawled Markdown. It scopes chunk_id, fills each chunk's source, and keys Skip if unchanged, so editing one section keeps the other sections' IDs. Defaults to the Document URL.",
+      "editor": "textfield",
+      "maxLength": 2000
+    },
     "kvs_store": {
       "title": "Key-value store",
       "type": "string",
@@ -62,7 +69,7 @@
     "max_chunk_tokens": {
       "title": "Max chunk size (tokens)",
       "type": "integer",
-      "description": "Sections longer than this many tokens are re-split on paragraph, line, sentence and word boundaries with 10% overlap; shorter sections stay whole. 512 suits modern embedding models (OpenAI, Voyage, Cohere, Gemini, Jina, Qwen3); use 256 for short factual lookups and 1024 for long analytical answers. Leave empty for no cap.",
+      "description": "Sections longer than this many tokens are re-split on paragraph, line, sentence and word boundaries with 10% overlap; shorter sections stay whole. 512 suits modern embedding models (OpenAI, Voyage, Cohere, Gemini, Jina, Qwen3); use 256 for short factual lookups and 1024 for long analytical answers. To keep sections whole regardless of size, send null via the API.",
       "minimum": 50,
       "maximum": 8192,
       "default": 512,

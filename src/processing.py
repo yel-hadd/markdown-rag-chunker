@@ -25,7 +25,10 @@ from .models import MarkdownChunk, MarkdownSplitterInput
 
 #: Recursive split boundaries, coarse to fine: paragraphs, lines, CJK and
 #: Latin sentence ends, then words and characters.
-_SEPARATORS = ["\n\n", "\n", "。", "！", "？", "；", ". ", " ", ""]
+#: Sentence ends are zero-width lookbehinds so the punctuation stays on the
+#: preceding chunk; spaces start the next piece (" word"), which tokenizers
+#: count as one token, so merged sizes match the real token count.
+_SEPARATORS = ["\n\n", "\n", "(?<=[。！？；])", "(?<=[.!?] )", " ", ""]
 
 #: Length (hex characters) of the short hashes exposed in output records.
 _SHORT_HASH_LENGTH = 16
@@ -45,19 +48,32 @@ def document_hash(markdown_text: str) -> str:
     return _short_hash(markdown_text.encode("utf-8"))
 
 
+def document_source(params: MarkdownSplitterInput) -> str | None:
+    """Stable identity of the document, exposed as each chunk's ``source``.
+
+    ``source_id`` wins; otherwise the URL, or ``kvs://<store>/<key>`` so the
+    same key in two stores stays distinct. Pasted text without ``source_id``
+    has no identity (``None``).
+    """
+    if params.source_id:
+        return params.source_id
+    if params.input_mode != "file":
+        return None
+    source = (params.markdown_file or "").strip()
+    if source.startswith("kvs://"):
+        return f"kvs://{params.kvs_store}/{source.removeprefix('kvs://')}"
+    return source
+
+
 def cache_record_key(params: MarkdownSplitterInput, doc_hash: str) -> str:
     """Key of this source's change-detection record in the cache store.
 
-    File-mode sources are keyed by their URL/``kvs://`` string so an edited
-    document overwrites its previous state; text mode has no source name,
-    so it is keyed by the document hash (a hit means "already chunked").
+    Documents with an identity (URL, ``kvs://``, ``source_id``) are keyed by
+    it, so an edited document overwrites its previous state; pasted text
+    without ``source_id`` is keyed by its hash (a hit means "already chunked").
     """
-    source = (
-        (params.markdown_file or "").strip()
-        if params.input_mode == "file"
-        else f"hash:{doc_hash}"
-    )
-    identity = json.dumps([params.cache_namespace, params.kvs_store or "", source])
+    source = document_source(params) or f"hash:{doc_hash}"
+    identity = json.dumps([params.cache_namespace, source])
     return "state-" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
 
 
@@ -66,19 +82,24 @@ _MAX_RETRIES = 2
 _MAX_RETRY_WAIT_SECONDS = 5.0
 
 
-def retry_delay(status: int, retry_after: str | None, attempt: int) -> float | None:
+def retry_delay(status: int | None, retry_after: str | None, attempt: int) -> float | None:
     """Seconds to wait before retrying a download, or ``None`` to give up.
 
-    Only rate limiting (429) and server errors (5xx) are transient. Waits
-    back off exponentially (1 s, 2 s) or follow a numeric ``Retry-After``,
-    capped so a slow server cannot burn the run's time and compute.
+    Transport errors (``status`` None), rate limiting (429) and server
+    errors (5xx) are transient. Waits back off exponentially (1 s, 2 s) or
+    follow a numeric ``Retry-After``, capped so a slow server cannot burn
+    the run's time and compute.
     """
-    if attempt >= _MAX_RETRIES or not (status == 429 or 500 <= status < 600):
+    transient = status is None or status == 429 or 500 <= status < 600
+    if attempt >= _MAX_RETRIES or not transient:
         return None
+    wait = 2.0**attempt
     try:
-        wait = float(retry_after) if retry_after else 2.0**attempt
+        requested = float(retry_after) if retry_after else None
     except ValueError:
-        wait = 2.0**attempt
+        requested = None
+    if requested is not None and math.isfinite(requested) and requested >= 0:
+        wait = requested
     return min(wait, _MAX_RETRY_WAIT_SECONDS)
 
 
@@ -164,7 +185,8 @@ def split_config_fingerprint(params: MarkdownSplitterInput) -> str:
                 "headers_to_split_on": params.headers_to_split_on,
                 "strip_headers": params.strip_headers,
                 "max_chunk_chars": params.max_chunk_chars,
-                "max_chunk_tokens": params.max_chunk_tokens,
+                # The token cap is ignored when a character cap is set.
+                "max_chunk_tokens": None if params.max_chunk_chars else params.max_chunk_tokens,
                 "tokenizer": params.tokenizer,
             },
             sort_keys=True,
@@ -181,6 +203,12 @@ def _encoding(name: str) -> tiktoken.Encoding:
 def count_tokens(text: str, tokenizer: str) -> int:
     """Exact token count of ``text`` for a tiktoken encoding name."""
     return len(_encoding(tokenizer).encode(text, disallowed_special=())) if text else 0
+
+
+#: Section and chunk counts, shared by split_documents and format_chunks so
+#: an unsplit section is tokenized once (the splitter's many small pieces
+#: use the uncached count_tokens).
+_count_tokens_cached = functools.lru_cache(maxsize=16_384)(count_tokens)
 
 
 def split_documents(params: MarkdownSplitterInput, markdown_text: str) -> list[Any]:
@@ -206,7 +234,12 @@ def split_documents(params: MarkdownSplitterInput, markdown_text: str) -> list[A
         measure = functools.partial(count_tokens, tokenizer=params.tokenizer)
 
     if cap:
-        sizes = [measure(d.page_content or "") for d in documents]
+        size_of = (
+            measure
+            if params.max_chunk_chars
+            else functools.partial(_count_tokens_cached, tokenizer=params.tokenizer)
+        )
+        sizes = [size_of(d.page_content or "") for d in documents]
         # Lower bound on the final count: an oversized section needs at least
         # ceil(size / cap) pieces. Failing here avoids building a huge list of
         # documents (and their metadata copies) just to reject it.
@@ -216,20 +249,25 @@ def split_documents(params: MarkdownSplitterInput, markdown_text: str) -> list[A
                 f"Chunk count would be at least {minimum}, which exceeds "
                 f"max_chunks ({params.max_chunks})."
             )
-        overlap = min(cap // 10, cap - 1)
-        resizer = RecursiveCharacterTextSplitter(
-            chunk_size=cap,
-            chunk_overlap=overlap,
-            separators=_SEPARATORS,
-            keep_separator="end",
-            length_function=measure,
-        )
+        def resplit(document: Any, target: int) -> list[Any]:
+            resizer = RecursiveCharacterTextSplitter(
+                chunk_size=target,
+                chunk_overlap=min(target // 10, target - 1),
+                separators=_SEPARATORS,
+                is_separator_regex=True,
+                length_function=measure,
+            )
+            pieces: list[Any] = []
+            for piece in resizer.split_documents([document]):
+                # Pieces are sized separately; joined text can tokenize a few
+                # tokens longer, so re-split the rare piece that overshoots.
+                excess = measure(piece.page_content) - cap
+                pieces.extend(resplit(piece, max(10, target - excess - 8)) if excess > 0 and target > 10 else [piece])
+            return pieces
+
         resized: list[Any] = []
         for document, size in zip(documents, sizes):
-            if size <= cap:
-                resized.append(document)
-            else:
-                resized.extend(resizer.split_documents([document]))
+            resized.extend([document] if size <= cap else resplit(document, cap))
         documents = resized
 
     if len(documents) > params.max_chunks:
@@ -258,6 +296,7 @@ def format_chunks(
     source: str | None = None,
     document_hash: str = "",
     tokenizer: str = "cl100k_base",
+    prepend_header_path: bool = True,
 ) -> list[MarkdownChunk]:
     """Convert LangChain documents into ``MarkdownChunk`` output records.
 
@@ -268,7 +307,9 @@ def format_chunks(
     documents never share an ID, while untouched sections keep theirs when
     another part of the same file changes. Repeats of an identical chunk
     within a document also hash their occurrence number. ``token_count`` is
-    an exact count with ``tokenizer``.
+    an exact count with ``tokenizer``. ``embedding_text`` prepends the
+    header path unless ``prepend_header_path`` is off (headers kept in
+    ``content``, so the path would repeat them).
     """
     scope = source or f"text:{document_hash}"
     chunks: list[MarkdownChunk] = []
@@ -289,14 +330,14 @@ def format_chunks(
                 content=content,
                 metadata=metadata,
                 header_path=path,
-                embedding_text=f"{path}\n\n{content}" if path else content,
+                embedding_text=f"{path}\n\n{content}" if path and prepend_header_path else content,
                 chunk_id=hashlib.sha256(hash_input).hexdigest()[:16],
                 chunk_index=index,
                 chunk_total=len(documents),
                 source=source,
                 document_hash=document_hash,
                 char_count=len(content),
-                token_count=count_tokens(content, tokenizer),
+                token_count=_count_tokens_cached(content, tokenizer),
             )
         )
     return chunks

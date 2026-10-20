@@ -9,6 +9,7 @@ import time
 
 from apify import Actor
 from curl_cffi.requests import AsyncSession
+from curl_cffi.requests.exceptions import RequestException
 from pydantic import ValidationError
 
 from .models import MarkdownSplitterInput, ProcessingMetrics
@@ -16,6 +17,7 @@ from .processing import (
     cache_hit,
     cache_record_key,
     document_hash,
+    document_source,
     format_chunks,
     http_error_message,
     read_capped,
@@ -70,20 +72,26 @@ async def main():
                 async with AsyncSession(
                     impersonate="chrome", timeout=90, proxy=fetch_proxy
                 ) as session:
-                    # Rate limits (429) and server errors (5xx) are retried
-                    # briefly; see processing.retry_delay for the policy.
+                    # Transport errors, rate limits (429) and server errors (5xx)
+                    # are retried briefly; see processing.retry_delay.
                     attempt = 0
                     while True:
-                        response = await session.get(url, stream=True)
-                        wait = retry_delay(
-                            response.status_code, response.headers.get("retry-after"), attempt
-                        )
-                        if wait is None:
-                            break
-                        await response.aclose()
-                        Actor.log.warning(
-                            f"HTTP {response.status_code} from the source; retrying in {wait:.0f} s."
-                        )
+                        try:
+                            response = await session.get(url, stream=True)
+                        except RequestException as exc:
+                            wait = retry_delay(None, None, attempt)
+                            if wait is None:
+                                raise ValueError(f"Download failed: {exc}") from exc
+                            reason = type(exc).__name__
+                        else:
+                            wait = retry_delay(
+                                response.status_code, response.headers.get("retry-after"), attempt
+                            )
+                            if wait is None:
+                                break
+                            await response.aclose()
+                            reason = f"HTTP {response.status_code}"
+                        Actor.log.warning(f"{reason} from the source; retrying in {wait:.0f} s.")
                         await asyncio.sleep(wait)
                         attempt += 1
                     try:
@@ -197,9 +205,10 @@ async def main():
             # pass, max_chunks enforced) and format one record per chunk.
             chunks = format_chunks(
                 split_documents(params, markdown_text),
-                source=source if params.input_mode == "file" else None,
+                source=document_source(params),
                 document_hash=doc_hash,
                 tokenizer=params.tokenizer,
+                prepend_header_path=params.strip_headers,
             )
 
             # One dataset item per chunk: users pay per chunk (matches the

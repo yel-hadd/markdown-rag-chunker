@@ -16,6 +16,7 @@ from src.processing import (
     cache_record_key,
     convert_to_markdown,
     document_hash,
+    document_source,
     format_chunks,
     http_error_message,
     read_capped,
@@ -609,7 +610,61 @@ class CacheRecordKeyTests(unittest.TestCase):
         self.assertNotEqual(cache_record_key(p, "h1"), cache_record_key(p, "h2"))
 
 
+class DocumentSourceTests(unittest.TestCase):
+    def test_url_source(self) -> None:
+        p = MarkdownSplitterInput(markdown_file=" https://a.example/x.pdf ")
+        self.assertEqual(document_source(p), "https://a.example/x.pdf")
+
+    def test_kvs_source_includes_the_store(self) -> None:
+        a = MarkdownSplitterInput(markdown_file="kvs://manual", kvs_store="store-a")
+        b = MarkdownSplitterInput(markdown_file="kvs://manual", kvs_store="store-b")
+        self.assertEqual(document_source(a), "kvs://store-a/manual")
+        self.assertNotEqual(document_source(a), document_source(b))
+
+    def test_pasted_text_has_no_source(self) -> None:
+        self.assertIsNone(document_source(MarkdownSplitterInput(markdown_text="# H")))
+
+    def test_source_id_overrides(self) -> None:
+        for p in (
+            MarkdownSplitterInput(markdown_text="# H", source_id="crawl:page-1"),
+            MarkdownSplitterInput(markdown_file="https://a.example/x.pdf", source_id="crawl:page-1"),
+        ):
+            self.assertEqual(document_source(p), "crawl:page-1")
+
+
+class SourceIdTests(unittest.TestCase):
+    def test_blank_source_id_is_none(self) -> None:
+        self.assertIsNone(MarkdownSplitterInput(markdown_text="# H", source_id="  ").source_id)
+
+    def test_text_with_source_id_keeps_ids_of_untouched_sections(self) -> None:
+        # Without a stable identity, one typo anywhere changed every ID.
+        def ids(text: str) -> dict[str, str]:
+            p = MarkdownSplitterInput(markdown_text=text, source_id="doc-1")
+            docs = split_documents(p, text)
+            return {
+                c.header_path: c.chunk_id
+                for c in format_chunks(docs, source=document_source(p), document_hash=document_hash(text))
+            }
+        before = ids("# A\nalpha\n# B\nbeta")
+        after = ids("# A\nalpha\n# B\nbeta (typo fixed)")
+        self.assertEqual(before["A"], after["A"])
+        self.assertNotEqual(before["B"], after["B"])
+
+    def test_text_cache_key_follows_source_id(self) -> None:
+        a = MarkdownSplitterInput(markdown_text="# v1", source_id="doc-1")
+        b = MarkdownSplitterInput(markdown_text="# v2", source_id="doc-1")
+        self.assertEqual(cache_record_key(a, "h1"), cache_record_key(b, "h2"))
+
+
 class RetryDelayTests(unittest.TestCase):
+    def test_transport_errors_are_retried(self) -> None:
+        self.assertEqual(retry_delay(None, None, attempt=0), 1.0)
+        self.assertIsNone(retry_delay(None, None, attempt=2))
+
+    def test_non_finite_or_negative_retry_after_falls_back_to_backoff(self) -> None:
+        for bad in ("nan", "inf", "-5"):
+            self.assertEqual(retry_delay(503, bad, attempt=0), 1.0, bad)
+
     def test_success_and_client_errors_are_not_retried(self) -> None:
         for status in (200, 301, 400, 403, 404, 410):
             self.assertIsNone(retry_delay(status, None, attempt=0), status)
@@ -759,6 +814,11 @@ class SplitConfigFingerprintTests(unittest.TestCase):
             split_config_fingerprint(self._params(headers_to_split_on=["#"])),
         )
 
+    def test_char_cap_makes_token_cap_irrelevant(self) -> None:
+        a = split_config_fingerprint(self._params(max_chunk_chars=2000, max_chunk_tokens=512))
+        b = split_config_fingerprint(self._params(max_chunk_chars=2000, max_chunk_tokens=None))
+        self.assertEqual(a, b)
+
     def test_token_settings_change_fingerprint(self) -> None:
         base = split_config_fingerprint(self._params())
         self.assertNotEqual(base, split_config_fingerprint(self._params(max_chunk_tokens=256)))
@@ -824,6 +884,12 @@ class FormatChunksTests(unittest.TestCase):
     def test_embedding_text_prepends_header_path(self) -> None:
         chunk = format_chunks([self._Doc("Use pip.", {"Header 1": "Guide", "Header 2": "Install"})])[0]
         self.assertEqual(chunk.embedding_text, "Guide > Install\n\nUse pip.")
+
+    def test_embedding_text_does_not_repeat_kept_headers(self) -> None:
+        # With strip_headers off, content already starts with its header.
+        doc = self._Doc("## Install\nUse pip.", {"Header 1": "Guide", "Header 2": "Install"})
+        chunk = format_chunks([doc], prepend_header_path=False)[0]
+        self.assertEqual(chunk.embedding_text, "## Install\nUse pip.")
 
     def test_embedding_text_is_content_without_headers(self) -> None:
         self.assertEqual(format_chunks([self._Doc("Intro text", {})])[0].embedding_text, "Intro text")
@@ -1324,6 +1390,17 @@ class SplitDocumentsTests(unittest.TestCase):
             docs = split_documents(self._params(headers_to_split_on=[]), text)
             self.assertGreater(len(docs), 1)
             self.assertLessEqual(max(len(enc.encode(d.page_content)) for d in docs), 512)
+
+    def test_token_chunks_fill_close_to_the_cap(self) -> None:
+        # Text without paragraph breaks splits at word level; pieces must be
+        # counted in context or chunks come out far below the cap (and users
+        # pay for more of them).
+        enc = tiktoken.get_encoding("cl100k_base")
+        words = ("retrieval augmented generation needs well sized chunks " * 600).strip()
+        docs = split_documents(self._params(headers_to_split_on=[]), words)
+        sizes = sorted(len(enc.encode(d.page_content)) for d in docs[:-1])
+        self.assertLessEqual(sizes[-1], 512)
+        self.assertGreaterEqual(sizes[len(sizes) // 2], 460)
 
     def test_sections_under_token_cap_stay_whole(self) -> None:
         docs = split_documents(self._params(headers_to_split_on=["#"]), "# A\nshort body")

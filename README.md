@@ -7,10 +7,10 @@
 ## What does Markdown RAG Chunker do?
 
 - **Converts 12 formats to Markdown** with Microsoft's [markitdown](https://github.com/microsoft/markitdown): PDF, HTML, DOCX, PPTX, XLSX, XLS, EPUB, CSV, JSON, XML, Markdown and plain text. The server's content type and charset are passed to the converter, so CSV becomes a table and Latin-1 pages keep their accents.
-- **Splits on the document's own headings** (`#` to `######`). A chunk about authentication keeps `{"Header 1": "API Reference", "Header 2": "Authentication"}` in its `metadata`.
+- **Splits on the document's own headings**: `#`, `##` and `###` by default, any levels up to `######` if you choose. A chunk about authentication keeps `{"Header 1": "API Reference", "Header 2": "Authentication"}` in its `metadata`.
 - **Caps oversized sections at 512 real tokens** (configurable, measured with tiktoken `cl100k_base` or `o200k_base`). Long sections are re-split on paragraph, line, sentence and word boundaries, including Chinese and Japanese sentence ends, with 10% overlap; sections under the cap stay whole.
 - **Adds `embedding_text`**: the header path and the content joined by a blank line. Anthropic's [contextual retrieval study](https://www.anthropic.com/news/contextual-retrieval) found that prepending document context to each chunk cut retrieval failures by 35%; `embedding_text` is a lightweight version that needs no LLM call.
-- **Gives every chunk a source-scoped `chunk_id`**: identical sections in two documents never collide, untouched sections keep their ID when another part of the file changes, and repeated sections inside a document get distinct IDs.
+- **Gives every chunk a source-scoped `chunk_id`**: identical sections in two documents never collide, untouched sections keep their ID when another part of the document changes (for URLs, or pasted text with a `source_id`), and repeated sections inside a document get distinct IDs.
 - **Carries provenance** on every chunk: `source`, `document_hash`, `chunk_index`, `chunk_total` and `header_path`, for citations, ordering and deleting a document's old chunks.
 - **Counts tokens exactly** (`token_count`), so non-English text no longer blows past your embedding model's limit.
 - **Downloads like a real browser** with [curl_cffi](https://github.com/lexiforest/curl_cffi) and a genuine Chrome TLS fingerprint, with optional Apify Proxy or your own proxy. Files up to 25 MB.
@@ -84,6 +84,7 @@ Send `markdown_file` (a URL) or `markdown_text` (Markdown); each run chunks one 
 | `headers_to_split_on` | `#`, `##`, `###` | Add `####` for very deep documents |
 | `strip_headers` | on | Off to keep header lines inside `content` |
 | `skip_if_unchanged` | off | On for scheduled pipelines |
+| `source_id` | the URL | Set it when you paste text (e.g. a crawled page's URL) so IDs and Skip if unchanged follow the document |
 | `cache_namespace` | empty | Set per pipeline (e.g. `dev`, `prod`) when several chunk the same document |
 | `max_input_chars` | 2,000,000 | Up to 5,000,000 for very long documents |
 | `max_chunks` | 5,000 | Lower it as a budget guard, especially for AI agents |
@@ -133,7 +134,7 @@ A failed run also writes Output, as `{"failed": true, "error": "..."}`, so pipel
 | `header_path` | dataset item | Section path, e.g. `Guide > Install > Windows` |
 | `chunk_id` | dataset item | Stable 16-character ID, scoped to the source; use as the upsert key |
 | `chunk_index` / `chunk_total` | dataset item | 0-based position in the document and the number of chunks |
-| `source` | dataset item | Source URL or `kvs://KEY`; `null` for pasted text |
+| `source` | dataset item | `source_id`, the URL, or `kvs://<store>/<key>`; `null` for pasted text without `source_id` |
 | `document_hash` | dataset item and Output | Fingerprint of the converted document; changes when the document changes |
 | `char_count` | dataset item | Character length of `content` |
 | `token_count` | dataset item | Exact token count of `content` with the chosen `tokenizer` |
@@ -295,7 +296,7 @@ Any. The output is plain text and JSON. The default 512-token cap fits every cur
 
 ### How do I keep my vector index in sync when documents change?
 
-Run with **Skip if unchanged** on a schedule. When a document changes, upsert the new chunks by `chunk_id`, then delete the chunks with the same `source` and a different `document_hash`. Sections that didn't change keep their `chunk_id`.
+Run with **Skip if unchanged** on a schedule. When a document changes, upsert the new chunks by `chunk_id`, then delete the chunks with the same `source` and a different `document_hash`. For pasted text, pass a stable `source_id` so this works. Sections that didn't change keep their `chunk_id`.
 
 ### How do I chunk a PDF for a vector database?
 
