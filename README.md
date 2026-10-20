@@ -90,34 +90,34 @@ Send `markdown_file` (a URL) or `markdown_text` (Markdown); each run chunks one 
 
 ## Output
 
-Each chunk is one dataset item (example values; refresh with a real run):
+Each chunk is one dataset item. A real chunk from the Giant panda Wikipedia article (`content` shortened):
 
 ```json
 {
-  "content": "Giant pandas live in a few mountain ranges in central China...",
-  "metadata": { "Header 1": "Giant panda", "Header 2": "Distribution and habitat" },
-  "header_path": "Giant panda > Distribution and habitat",
-  "embedding_text": "Giant panda > Distribution and habitat\n\nGiant pandas live in a few mountain ranges in central China...",
-  "chunk_id": "f8b6be2adf7f6dbf",
+  "content": "In [Taiwan](https://en.wikipedia.org/wiki/Taiwan \"Taiwan\"), another popular name for panda is the inverted *dàmāoxióng* (大貓熊; lit.'giant cat bear')…",
+  "metadata": { "Header 1": "Giant panda", "Header 2": "Etymology" },
+  "header_path": "Giant panda > Etymology",
+  "chunk_id": "d5bc2488a2717298",
   "chunk_index": 7,
-  "chunk_total": 41,
+  "chunk_total": 197,
   "source": "https://en.wikipedia.org/wiki/Giant_panda",
-  "document_hash": "ee68cce8b9dd2138",
-  "char_count": 1342,
-  "token_count": 287
+  "document_hash": "f9974bfd4079e9eb",
+  "embedding_text": "Giant panda > Etymology\n\nIn [Taiwan](https://en.wikipedia.org/wiki/Taiwan \"Taiwan\"), another popular name…",
+  "char_count": 884,
+  "token_count": 243
 }
 ```
 
-Run totals are saved as the run's named **Output**:
+The run's named **Output** for the same document:
 
 ```json
 {
   "input_mode": "file",
   "input_file_type": "text/html; charset=utf-8",
-  "input_chars": 255710,
-  "chunk_count": 41,
-  "elapsed_ms": 2140,
-  "document_hash": "ee68cce8b9dd2138",
+  "input_chars": 228068,
+  "chunk_count": 197,
+  "elapsed_ms": 7262,
+  "document_hash": "f9974bfd4079e9eb",
   "unchanged": false,
   "charge_limit_reached": false
 }

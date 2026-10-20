@@ -2,7 +2,7 @@
   "actorSpecification": 1,
   "name": "markdown-rag-chunker",
   "title": "Markdown RAG Chunker: PDF, Word & HTML Splitter",
-  "description": "Split PDFs, Word, PowerPoint, Excel, EPUB and web pages into RAG-ready chunks. Header-aware splitting keeps each chunk inside one section with its header path as metadata, and caps long sections at ~400 tokens. Stable chunk IDs and token counts for Pinecone, Qdrant or pgvector.",
+  "description": "Split PDFs, Word, PowerPoint, Excel, EPUB and web pages into RAG-ready chunks of up to 512 tokens. Header-aware splitting keeps each chunk inside one section, with its header path, source, position, stable ID and exact token count. Ready for Pinecone, Qdrant or pgvector.",
   "version": "1.3",
   "buildTag": "latest",
   "dockerfile": "./Dockerfile",

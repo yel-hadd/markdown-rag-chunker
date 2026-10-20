@@ -34,36 +34,44 @@ Leave the "Pay per event + usage" option off: it hurts the Actor's quality score
 - `apify-default-dataset-item` cannot be renamed. It is the per-chunk revenue event.
 - If a `document-chunked` event exists from an old configuration, delete it.
 
-## Measured platform cost (2026-10, 21 production runs, 256 MB)
+## Measured platform cost (2026-10-20, build 1.3.3, 1024 MB)
+
+Measured while the Actor was still FREE, so the 5 s compute waiver (worth about
+`$0.0003` per run at 1 GB) is **not** subtracted below.
 
 | Run type | Platform cost |
 | --- | --- |
-| Typical run, 6–12 s | `$0.00020–0.00039` |
-| Zero-chunk run (cache hit or failed input), 2–12 s | `$0.00009–0.00028` |
+| Small text run, 2–7 s | `$0.00031–0.00052` |
+| Typical web page, 10–14 s, 33–237 chunks | `$0.00039–0.0021` |
+| Zero-chunk run: Skip if unchanged hit (1.9 s) | `$0.00021` |
+| Zero-chunk run: failed input or 404 (3–9 s) | `$0.00020–0.00061` |
 | Per pushed chunk (dataset write) | `$0.000005` |
-| Ceiling: 300 s run timeout | `~$0.004` (`~$0.008` at 512 MB) |
+| 300-page PDF, 219 s, 738 chunks | `$0.0117` |
+| Ceiling: 600 s default timeout at 1 GB | `~$0.035` |
 
-About half of a typical run's cost is fixed key-value store writes (INPUT, OUTPUT,
-cache state), which the 5 s compute waiver does not cover. For pricing, assume
-**1.5× the measured costs**: `$0.00035` fixed per typical run, `$0.0025` for a heavy
-run (60 s at 512 MB).
+At 256 MB the same PDF took 825 s (CPU scales with memory, ~1 core per 4 GB), so
+1024 MB costs about the same compute for CPU-bound work and finishes ~4× faster.
+For pricing, assume **1.5× the measured costs**: `$0.0009` for the worst zero-chunk
+run, `$0.0025` for a heavy run (60 s at 1 GB).
 
 ## Margin check (Gold tier, the lowest per-chunk price)
 
-| Run | Creator revenue | Cost (1.5× measured) | Profit |
+| Run | Creator revenue | Cost (measured, no waiver) | Profit |
 | --- | --- | --- | --- |
-| 0 chunks (skip hit, failed input) | `$0.0008` | `$0.00035` | `+$0.00045` |
-| 1 chunk | `$0.00128` | `$0.00036` | `+$0.00092` |
-| 20 chunks | `$0.0104` | `$0.0005` | `+$0.0099` |
-| Heavy run, 60 s at 512 MB, 5 chunks | `$0.0032` | `$0.0025` | `+$0.0007` |
+| 0 chunks, Skip if unchanged hit | `$0.0008` | `$0.00021` | `+$0.00059` |
+| 0 chunks, failed input (worst measured) | `$0.0008` | `$0.00061` | `+$0.00019` |
+| 2 chunks, small text | `$0.00176` | `$0.00052` | `+$0.0012` |
+| 197 chunks, Giant panda page | `$0.0954` | `$0.0016` | `+$0.094` |
+| 738 chunks, 300-page PDF | `$0.355` | `$0.0117` | `+$0.343` |
 
-Break-even is below one chunk for normal runs. The only loss case is a heavy run
-(long conversion) that produces almost no chunks, capped by the run timeout.
+With the 5 s waiver active under pay-per-event, the zero-chunk margin grows by about
+`$0.0003`. The only loss case is a run that converts for minutes and then fails
+(e.g. `max_chunks` exceeded), capped by the 600 s timeout at about `$0.035`.
 
-The original plan (start event at the `$0.00005` default) lost `~$0.0003` on every
-zero-chunk run: one user checking 100 documents hourly with Skip if Unchanged
+The original plan (start event at the `$0.00005` default) lost money on every
+zero-chunk run: one user checking 100 documents hourly with Skip if unchanged
 (72k runs/month) would have cost the creator `~$22/month`. At `$0.001` the same
-user earns `~$32/month`.
+user earns `~$42/month`.
 
 ## Change-detection cache economics
 
