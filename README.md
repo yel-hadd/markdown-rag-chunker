@@ -71,7 +71,7 @@ This Actor uses [pay-per-event pricing](https://docs.apify.com/platform/actors/p
 
 The input form in Apify Console, prefilled with this README and the default chunking settings:
 
-<a href="https://console.apify.com/actors/84h4GucI0gbo1SrN7?fpr=use-apify"><img src="https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/docs/images/markdown-rag-chunker-input-form.png" alt="Markdown RAG Chunker input form in Apify Console with a document URL and the chunking strategy settings" style="width:60%;"></a>
+<a href="https://console.apify.com/actors/84h4GucI0gbo1SrN7?fpr=use-apify"><img src="https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/docs/images/markdown-rag-chunker-input-form.png" alt="Markdown RAG Chunker input form in Apify Console with a document URL and the chunking strategy settings" width="60%"></a>
 
 The same settings as JSON for the API, here for a Wikipedia article:
 
@@ -103,7 +103,7 @@ Send `markdown_file` (a URL) or `markdown_text` (Markdown); each run chunks one 
 
 Each chunk is one dataset item. In the Console's **Chunks** view of the prefilled run on this README (40 chunks in about 10 seconds when the screenshot was taken), each row shows the chunk's section, token count and content:
 
-<img src="https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/docs/images/markdown-rag-chunker-output-chunks.png" alt="Markdown RAG Chunker output in Apify Console: a table of chunks with section header path, token count, content and chunk ID" style="width:80%;">
+<img src="https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/docs/images/markdown-rag-chunker-output-chunks.png" alt="Markdown RAG Chunker output in Apify Console: a table of chunks with section header path, token count, content and chunk ID" width="80%">
 
 A real chunk from the Giant panda input above, as JSON (`content` shortened):
 
