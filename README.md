@@ -101,7 +101,7 @@ Send `markdown_file` (a URL) or `markdown_text` (Markdown); each run chunks one 
 
 ## Output
 
-Each chunk is one dataset item. The prefilled run on this README returns 40 chunks in about 10 seconds, and the **Chunks** view shows each one's section, token count and content:
+Each chunk is one dataset item. In the Console's **Chunks** view of the prefilled run on this README (40 chunks in about 10 seconds when the screenshot was taken), each row shows the chunk's section, token count and content:
 
 <img src="https://raw.githubusercontent.com/yel-hadd/markdown-rag-chunker/main/docs/images/markdown-rag-chunker-output-chunks.png" alt="Markdown RAG Chunker output in Apify Console: a table of chunks with section header path, token count, content and chunk ID" style="width:80%;">
 
