@@ -61,7 +61,7 @@ run, `$0.0025` for a heavy run (60 s at 1 GB).
 | 0 chunks, Skip if unchanged hit | `$0.0008` | `$0.00021` | `+$0.00059` |
 | 0 chunks, failed input (worst measured) | `$0.0008` | `$0.00061` | `+$0.00019` |
 | 2 chunks, small text | `$0.00176` | `$0.00052` | `+$0.0012` |
-| 197 chunks, Giant panda page | `$0.0954` | `$0.0016` | `+$0.094` |
+| 198 chunks, Giant panda page | `$0.0958` | `$0.0014` | `+$0.094` |
 | 738 chunks, 300-page PDF | `$0.355` | `$0.0117` | `+$0.343` |
 
 With the 5 s waiver active under pay-per-event, the zero-chunk margin grows by about
