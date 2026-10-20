@@ -1,39 +1,50 @@
 {
   "title": "Markdown RAG Chunker",
-  "description": "Create RAG-ready Markdown chunks with header-aware structure, token-aware sizing, and predictable run limits.",
+  "description": "Turn a document URL or pasted Markdown into header-aware RAG chunks with stable IDs and token counts.",
   "type": "object",
   "schemaVersion": 1,
   "properties": {
-    "input_mode": {
-      "title": "Input Mode",
-      "type": "string",
-      "description": "Use text to paste Markdown directly. Use file to load and convert a supported file format from an HTTP(S) URL or kvs://KEY.",
-      "enum": [
-        "text",
-        "file"
-      ],
-      "default": "file",
-      "editor": "select"
-    },
-    "markdown_text": {
-      "title": "Markdown Text",
-      "type": "string",
-      "description": "Paste Markdown content here when input_mode is text.",
-      "editor": "textarea",
-      "default": "# Header 1\nHello, World!\n## Header 2\nGoodbye, World!"
-    },
     "markdown_file": {
-      "title": "Markdown File Source",
+      "title": "Document URL",
       "type": "string",
-      "description": "When input_mode is file, provide an HTTP(S) URL to Markdown, HTML, PDF, Word, Excel, PowerPoint, CSV, JSON, XML, EPUB, and more. You can also provide an Apify Key-Value Store record like kvs://MARKDOWN_INPUT.",
+      "description": "HTTP(S) URL of a PDF, webpage (HTML), Word, Excel, PowerPoint, EPUB, CSV, JSON, XML, Markdown or text file, up to 25 MB. Or kvs://KEY to read a record from the store selected under Key-value store.",
       "editor": "textfield",
-      "default": "https://en.wikipedia.org/wiki/Giant_panda",
       "prefill": "https://en.wikipedia.org/wiki/Giant_panda"
     },
+    "markdown_text": {
+      "title": "Markdown text",
+      "type": "string",
+      "description": "Or paste Markdown directly. Use either this or Document URL; if both are set, choose one with Input mode.",
+      "editor": "textarea"
+    },
+    "input_mode": {
+      "title": "Input mode",
+      "type": "string",
+      "description": "Optional. Detected automatically from whichever source you fill in; set it only when both Document URL and Markdown text are filled.",
+      "enum": [
+        "file",
+        "text"
+      ],
+      "enumTitles": [
+        "Document URL",
+        "Markdown text"
+      ],
+      "editor": "select"
+    },
+    "kvs_store": {
+      "title": "Key-value store",
+      "type": "string",
+      "description": "Only for kvs://KEY sources: the key-value store holding the record. The run gets read-only access to this store.",
+      "editor": "resourcePicker",
+      "resourceType": "keyValueStore",
+      "resourcePermissions": [
+        "READ"
+      ]
+    },
     "headers_to_split_on": {
-      "title": "Headers to Split On",
+      "title": "Headers to split on",
       "type": "array",
-      "description": "Markdown header levels to split on, such as ['#', '##']. Most RAG pipelines work best with ['#', '##', '###']. Content under headers not listed is merged into parent sections.",
+      "description": "Markdown header levels that start a new chunk. ['#', '##', '###'] gives section-level chunks for most documents; deeper headers stay inside their parent section.",
       "editor": "stringList",
       "default": [
         "#",
@@ -47,40 +58,44 @@
         "#",
         "##",
         "###"
-      ]
-    },
-    "strip_headers": {
-      "title": "Strip Headers",
-      "type": "boolean",
-      "description": "When true, header text is moved to metadata only. Use true for embedding pipelines and false for human-readable chunks.",
-      "default": true
+      ],
+      "sectionCaption": "Chunking strategy",
+      "sectionDescription": "Header-aware splitting first, then a size cap for oversized sections only."
     },
     "max_chunk_chars": {
-      "title": "Max Chunk Chars",
+      "title": "Max chunk size (characters)",
       "type": "integer",
-      "description": "Optional cap for chunk length in characters. Only oversized chunks are re-split (with 10% overlap); smaller sections pass through untouched. A common starting point is 1800 chars (about 450 tokens).",
-      "minimum": 1,
+      "description": "Sections longer than this are re-split on paragraph, line and word boundaries with 10% overlap; shorter sections stay intact. The default 1600 is about 400 tokens, a size that retrieves well in published chunking benchmarks.",
+      "minimum": 100,
       "maximum": 100000,
-      "prefill": 1800
+      "default": 1600,
+      "nullable": true
+    },
+    "strip_headers": {
+      "title": "Move headers to metadata",
+      "type": "boolean",
+      "description": "On: header text lives only in each chunk's metadata (best for embeddings). Off: chunks also keep their header line (best for human-readable output).",
+      "default": true
     },
     "skip_if_unchanged": {
-      "title": "Skip if Unchanged",
+      "title": "Skip if unchanged",
       "type": "boolean",
-      "description": "Skip re-chunking when the source document and split settings are unchanged since the last run: nothing is pushed to the dataset and the run costs only the $0.001 run start; an unchanged remote file is not even re-converted. The Output reports unchanged=true with the cached chunk count. Recommended for scheduled and recurring pipelines. First runs always process.",
-      "default": false
+      "description": "For scheduled pipelines: when the document and chunking settings match the previous run, nothing is pushed and the run costs only the $0.001 start fee. An unchanged file is not even re-converted. The run Output reports unchanged=true.",
+      "default": false,
+      "sectionCaption": "Recurring runs and limits"
     },
     "max_input_chars": {
-      "title": "Max Input Chars",
+      "title": "Max document size (characters)",
       "type": "integer",
-      "description": "Hard limit for input size in characters. Runs fail fast when exceeded to protect cost and runtime.",
+      "description": "Runs whose converted document is longer than this fail fast, before any chunks are billed.",
       "default": 500000,
       "minimum": 1,
       "maximum": 5000000
     },
     "max_chunks": {
-      "title": "Max Chunks",
+      "title": "Max chunks per run",
       "type": "integer",
-      "description": "Safety cap on total output chunks. Increase only for very large documents.",
+      "description": "Runs that would produce more chunks fail before pushing any, so you are never billed for a runaway split.",
       "default": 5000,
       "minimum": 1,
       "maximum": 50000
@@ -88,14 +103,16 @@
     "use_apify_proxy": {
       "title": "Use Apify Proxy",
       "type": "boolean",
-      "description": "Route the remote file fetch through Apify Proxy (datacenter). Proxy traffic is included in the price. Leave off for direct downloads. Only applies in file mode.",
-      "default": false
+      "description": "Download the document through Apify Proxy (datacenter) when a site blocks direct requests. Included in the price.",
+      "default": false,
+      "sectionCaption": "Proxy"
     },
     "proxy_url": {
-      "title": "Custom Proxy URL",
+      "title": "Custom proxy URL",
       "type": "string",
-      "description": "Bring your own proxy for the file fetch: http://user:pass@host:8080, https://host:8080, or socks5://host:1080. No Apify proxy involved. Mutually exclusive with Use Apify Proxy. Only applies in file mode. Leave empty for a direct (free) fetch.",
-      "editor": "textfield"
+      "description": "Or use your own proxy: http://user:pass@host:8080, https://host:8080 or socks5://host:1080. Stored encrypted. Not combinable with Use Apify Proxy.",
+      "editor": "textfield",
+      "isSecret": true
     }
   }
 }

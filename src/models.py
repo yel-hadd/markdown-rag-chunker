@@ -7,15 +7,22 @@ compute is spent — which keeps runs cheap and error messages actionable.
 import re
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 #: Proxy URL schemes accepted for user-supplied proxies in ``proxy_url``.
 _PROXY_SCHEMES = ("http", "https", "socks5")
 
 
 class MarkdownSplitterInput(BaseModel):
-    input_mode: Literal["text", "file"] = Field(
-        "text", description="Input mode: direct markdown text or file reference"
+    # Errors reach run logs: keep proxy credentials and huge texts out.
+    model_config = ConfigDict(hide_input_in_errors=True)
+
+    input_mode: Optional[Literal["text", "file"]] = Field(
+        None,
+        description=(
+            "Input mode: direct markdown text or file reference. Inferred from "
+            "whichever of markdown_text / markdown_file is set when omitted."
+        ),
     )
     markdown_text: Optional[str] = Field(
         None, description="Markdown content to split (text mode)"
@@ -24,7 +31,15 @@ class MarkdownSplitterInput(BaseModel):
         None,
         description=(
             "Source in file mode. Supported: HTTP(S) URL for markdown, HTML, PDF, "
-            "Word, Excel, PowerPoint, CSV, JSON, XML, EPUB, and more; or kvs://KEY."
+            "Word, Excel, PowerPoint, CSV, JSON, XML, EPUB, and more; or kvs://KEY "
+            "to read a record from the store selected in kvs_store."
+        ),
+    )
+    kvs_store: Optional[str] = Field(
+        None,
+        description=(
+            "Key-value store (ID) that kvs://KEY sources read from. Selected via "
+            "the Console store picker, which grants the run read access."
         ),
     )
     max_input_chars: int = Field(
@@ -34,10 +49,13 @@ class MarkdownSplitterInput(BaseModel):
         5_000, ge=1, le=50_000, description="Maximum number of chunks produced"
     )
     max_chunk_chars: Optional[int] = Field(
-        None,
-        ge=1,
+        1600,
+        ge=100,
         le=100_000,
-        description="Optional second-pass cap for chunk size in characters",
+        description=(
+            "Second-pass cap for chunk size in characters (default ~400 tokens); "
+            "only oversized sections are re-split. null disables the cap."
+        ),
     )
     headers_to_split_on: list[str] = Field(
         default=["#", "##", "###", "####", "#####", "######"],
@@ -49,7 +67,7 @@ class MarkdownSplitterInput(BaseModel):
         description=(
             "Skip re-chunking when the source document and split settings are "
             "unchanged since the last run: nothing is pushed to the dataset and "
-            "the run costs a fraction of a cent. The Output reports "
+            "the run costs only the start event. The Output reports "
             "unchanged=true with the cached chunk count. First runs always "
             "process."
         ),
@@ -58,15 +76,15 @@ class MarkdownSplitterInput(BaseModel):
         False,
         description=(
             "Route the remote fetch through Apify Proxy (datacenter, auto group). "
-            "Billed by Apify as standard platform usage; off by default."
+            "Included in the price; off by default."
         ),
     )
     proxy_url: Optional[str] = Field(
         None,
         description=(
             "Bring your own proxy for the remote fetch, e.g. "
-            "http://user:pass@host:8080 or socks5://host:1080. Free: no Apify "
-            "proxy charges. Mutually exclusive with use_apify_proxy."
+            "http://user:pass@host:8080 or socks5://host:1080. Mutually "
+            "exclusive with use_apify_proxy."
         ),
     )
 
@@ -87,17 +105,18 @@ class MarkdownSplitterInput(BaseModel):
     @field_validator("proxy_url")
     @classmethod
     def validate_proxy_url(cls, v: Optional[str]) -> Optional[str]:
-        if v is None:
-            return v
-        stripped = v.strip()
+        stripped = (v or "").strip()
+        if not stripped:
+            return None
         scheme, has_sep, rest = stripped.partition("://")
         if (
             not has_sep
             or scheme.lower() not in _PROXY_SCHEMES
             or not re.match(r"^[\w.\-:@\[\]]+", rest)
         ):
+            # Never echo the value: it may carry proxy credentials.
             raise ValueError(
-                f"Invalid proxy_url: {v}. Use http://, https:// or socks5:// "
+                "Invalid proxy_url. Use http://, https:// or socks5:// "
                 "with a host, e.g. http://user:pass@host:8080."
             )
         # Schemes are case-insensitive (RFC 3986); only the scheme is
@@ -110,6 +129,17 @@ class MarkdownSplitterInput(BaseModel):
             raise ValueError(
                 "Set either use_apify_proxy or proxy_url, not both."
             )
+        if self.input_mode is None:
+            has_text = bool(self.markdown_text and self.markdown_text.strip())
+            has_file = bool(self.markdown_file and self.markdown_file.strip())
+            if has_text and has_file:
+                raise ValueError(
+                    "Both markdown_text and markdown_file are set: choose one with "
+                    "input_mode ('text' or 'file')."
+                )
+            if not (has_text or has_file):
+                raise ValueError("Provide markdown_text or markdown_file.")
+            self.input_mode = "file" if has_file else "text"
         if self.input_mode == "text":
             if self.markdown_text is None or not self.markdown_text.strip():
                 raise ValueError("markdown_text is required when input_mode is 'text'.")
@@ -121,6 +151,11 @@ class MarkdownSplitterInput(BaseModel):
             if self.markdown_file is None or not self.markdown_file.strip():
                 raise ValueError(
                     "markdown_file is required when input_mode is 'file'."
+                )
+            if self.markdown_file.strip().startswith("kvs://") and not self.kvs_store:
+                raise ValueError(
+                    "kvs:// sources need kvs_store: select the key-value store "
+                    "that holds the record."
                 )
         return self
 
@@ -164,4 +199,11 @@ class ProcessingMetrics(BaseModel):
         None,
         ge=0,
         description="Chunk count from the previous run, present when unchanged=true.",
+    )
+    charge_limit_reached: bool = Field(
+        False,
+        description=(
+            "True when the run's maximum charge stopped the push early; "
+            "chunk_count is then the number of chunks actually delivered."
+        ),
     )

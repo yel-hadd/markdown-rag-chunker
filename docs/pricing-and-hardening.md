@@ -80,8 +80,9 @@ Markdown hash, which still skips splitting and pushing.
 
 - `proxy_url`: the user's own proxy, no Apify cost.
 - `use_apify_proxy`: Apify Proxy (datacenter group) is platform usage paid by the
-  creator. Downloads are capped by the `Content-Length` guard
-  (`max_input_chars × 4` bytes, 2 MB at the default), which bounds the traffic per run.
+  creator. Downloads are streamed with a hard 25 MB limit on the decompressed size, which
+  bounds the traffic per run; datacenter proxy traffic showed no separate usage line in
+  the 2026-10 test runs.
 
 ## Runtime hardening settings
 - `defaultMemoryMbytes`: `256`

@@ -12,7 +12,7 @@
     "runMetrics": {
       "type": "string",
       "title": "Run Metrics",
-      "description": "Run summary (input_mode, input_file_type, input_chars, chunk_count, elapsed_ms) stored as the OUTPUT record.",
+      "description": "Run summary (input_mode, input_file_type, input_chars, chunk_count, elapsed_ms, document_hash, unchanged, charge_limit_reached) stored as the OUTPUT record.",
       "template": "{{links.apiDefaultKeyValueStoreUrl}}/records/OUTPUT"
     }
   }

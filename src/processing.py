@@ -5,12 +5,15 @@ conversion) are injected as callables, so every function here is
 unit-testable without mocks or network access.
 """
 
+import functools
 import hashlib
 import io
 import inspect
 import json
 import math
-from typing import Any, Awaitable, Callable
+import posixpath
+from typing import Any, AsyncIterable, Awaitable, Callable
+from urllib.parse import urlsplit
 
 from langchain_text_splitters import (
     MarkdownHeaderTextSplitter,
@@ -37,12 +40,44 @@ def document_hash(markdown_text: str) -> str:
     return _short_hash(markdown_text.encode("utf-8"))
 
 
+def cache_record_key(params: MarkdownSplitterInput, doc_hash: str) -> str:
+    """Key of this source's change-detection record in the cache store.
+
+    File-mode sources are keyed by their URL/``kvs://`` string so an edited
+    document overwrites its previous state; text mode has no source name,
+    so it is keyed by the document hash (a hit means "already chunked").
+    """
+    source = (
+        (params.markdown_file or "").strip()
+        if params.input_mode == "file"
+        else f"hash:{doc_hash}"
+    )
+    return "state-" + hashlib.sha256(source.encode("utf-8")).hexdigest()[:24]
+
+
+async def read_capped(parts: AsyncIterable[bytes], limit: int) -> bytes:
+    """Join streamed byte parts, failing as soon as ``limit`` is exceeded.
+
+    Keeps memory bounded for downloads without (or with a lying)
+    Content-Length header, and for compressed bodies that expand.
+    """
+    buffer = bytearray()
+    async for part in parts:
+        buffer += part
+        if len(buffer) > limit:
+            raise ValueError(
+                f"Remote file is larger than {limit // 1_000_000} MB, the download limit."
+            )
+    return bytes(buffer)
+
+
 def source_fingerprint(raw_bytes: bytes, content_type: str) -> str:
     """Fingerprint of a fetched file before conversion.
 
     Lets change detection skip the (expensive) conversion when the raw
     download is byte-identical. The content type is included because it
-    selects the converter; JSON encoding keeps the two fields unambiguous.
+    steers conversion (format and charset); JSON encoding keeps the two
+    fields unambiguous.
     """
     header = json.dumps(content_type).encode("utf-8")
     return _short_hash(header + b"\n" + raw_bytes)
@@ -104,6 +139,17 @@ def split_documents(params: MarkdownSplitterInput, markdown_text: str) -> list[A
 
     if params.max_chunk_chars:
         cap = params.max_chunk_chars
+        # Lower bound on the final count: an oversized section needs at least
+        # ceil(len / cap) pieces. Failing here avoids building a huge list of
+        # documents (and their metadata copies) just to reject it.
+        minimum = sum(
+            max(1, math.ceil(len(d.page_content or "") / cap)) for d in documents
+        )
+        if minimum > params.max_chunks:
+            raise ValueError(
+                f"Chunk count would be at least {minimum}, which exceeds "
+                f"max_chunks ({params.max_chunks})."
+            )
         overlap = min(cap // 10, cap - 1)
         resizer = RecursiveCharacterTextSplitter(
             chunk_size=cap,
@@ -131,17 +177,21 @@ def format_chunks(documents: list[Any]) -> list[MarkdownChunk]:
     Each chunk gets a deterministic ``chunk_id`` — the first 16 hex
     characters of the SHA-256 over the sorted-key JSON of its content and
     metadata — so re-running the same input yields the same IDs and
-    downstream upserts stay idempotent.
+    downstream upserts stay idempotent. Repeats of an identical chunk also
+    hash their occurrence number, so every pushed chunk has a unique ID.
     """
     chunks: list[MarkdownChunk] = []
+    seen: dict[str, int] = {}
     for doc in documents:
         content = doc.page_content or ""
         metadata = doc.metadata or {}
-        hash_input = json.dumps(
-            {"content": content, "metadata": metadata},
-            ensure_ascii=True,
-            sort_keys=True,
-        ).encode("utf-8")
+        payload: dict[str, Any] = {"content": content, "metadata": metadata}
+        identity = json.dumps(payload, ensure_ascii=True, sort_keys=True)
+        occurrence = seen.get(identity, 0)
+        seen[identity] = occurrence + 1
+        if occurrence:
+            payload["occurrence"] = occurrence
+        hash_input = json.dumps(payload, ensure_ascii=True, sort_keys=True).encode("utf-8")
         chunk_id = hashlib.sha256(hash_input).hexdigest()[:16]
         char_count = len(content)
         token_count = math.ceil(char_count / 4) if char_count else 0
@@ -181,7 +231,6 @@ async def resolve_markdown_text(
     Raises ``ValueError`` on unsupported schemes, empty results, or inputs
     over ``max_input_chars``.
     """
-    converter = convert_remote_file or convert_to_markdown
     if params.input_mode == "text":
         if params.markdown_text is None:
             raise ValueError("markdown_text is required in text mode.")
@@ -205,6 +254,7 @@ async def resolve_markdown_text(
         if not isinstance(content_type, str):
             raise ValueError("Remote file content type must be a string.")
         input_file_type = content_type.strip().lower() or "application/octet-stream"
+        converter = convert_remote_file or functools.partial(convert_to_markdown, url=source)
         markdown_text = converter(bytes(raw_bytes), input_file_type)
     elif source.startswith("kvs://"):
         key = source.removeprefix("kvs://")
@@ -227,18 +277,39 @@ async def resolve_markdown_text(
     return markdown_text, input_file_type
 
 
-def convert_to_markdown(raw_bytes: bytes, content_type: str) -> str:
+def convert_to_markdown(raw_bytes: bytes, content_type: str, url: str | None = None) -> str:
+    """Convert a downloaded file to Markdown with markitdown.
+
+    The declared MIME type, charset, URL and file extension are passed as
+    hints (markitdown still sniffs the bytes); ``application/octet-stream``
+    is treated as unknown because servers send it for any binary file.
+    """
     try:
-        from markitdown import MarkItDown
+        from markitdown import MarkItDown, StreamInfo
     except ImportError as exc:  # pragma: no cover - dependency-level failure
         raise RuntimeError(
             "markitdown is required for URL file conversion. "
             "Install dependencies from requirements.txt."
         ) from exc
 
+    mimetype, _, params = content_type.partition(";")
+    mimetype = mimetype.strip().lower()
+    charset = None
+    for param in params.split(";"):
+        name, _, value = param.partition("=")
+        if name.strip().lower() == "charset" and value.strip():
+            charset = value.strip().strip('"')
+    extension = posixpath.splitext(urlsplit(url).path)[1].lower() if url else ""
+
     converter = MarkItDown(enable_plugins=False)
     result = converter.convert_stream(
-        io.BytesIO(raw_bytes), mimetype=content_type or "application/octet-stream"
+        io.BytesIO(raw_bytes),
+        stream_info=StreamInfo(
+            mimetype=None if mimetype in ("", "application/octet-stream") else mimetype,
+            charset=charset,
+            extension=extension or None,
+            url=url,
+        ),
     )
     markdown_text = result.text_content if result else None
     if markdown_text is None or not markdown_text.strip():

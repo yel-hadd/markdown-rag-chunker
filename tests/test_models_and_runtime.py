@@ -11,9 +11,11 @@ from pydantic import ValidationError
 from src.models import MarkdownChunk, MarkdownSplitterInput, ProcessingMetrics
 from src.processing import (
     cache_hit,
+    cache_record_key,
     convert_to_markdown,
     document_hash,
     format_chunks,
+    read_capped,
     resolve_markdown_text,
     source_fingerprint,
     split_config_fingerprint,
@@ -75,12 +77,81 @@ class InputModelFileModeTests(unittest.TestCase):
             MarkdownSplitterInput(input_mode="file", markdown_file="   ")
 
 
+class InputModeInferenceTests(unittest.TestCase):
+    """input_mode is inferred when omitted, so API callers who send only
+    markdown_text or only markdown_file get exactly what they sent."""
+
+    def test_infers_file_when_only_markdown_file_given(self) -> None:
+        obj = MarkdownSplitterInput(markdown_file="https://example.com/a.pdf")
+        self.assertEqual(obj.input_mode, "file")
+
+    def test_infers_text_when_only_markdown_text_given(self) -> None:
+        obj = MarkdownSplitterInput(markdown_text="# H")
+        self.assertEqual(obj.input_mode, "text")
+
+    def test_blank_markdown_file_counts_as_absent(self) -> None:
+        obj = MarkdownSplitterInput(markdown_text="# H", markdown_file="   ")
+        self.assertEqual(obj.input_mode, "text")
+
+    def test_both_sources_without_mode_is_rejected(self) -> None:
+        # Guessing here could chunk (and bill) the wrong document.
+        with self.assertRaisesRegex(ValidationError, "input_mode"):
+            MarkdownSplitterInput(
+                markdown_text="# H", markdown_file="https://example.com/a.pdf"
+            )
+
+    def test_explicit_mode_wins_when_both_sources_given(self) -> None:
+        obj = MarkdownSplitterInput(
+            input_mode="text",
+            markdown_text="# H",
+            markdown_file="https://example.com/a.pdf",
+        )
+        self.assertEqual(obj.input_mode, "text")
+
+    def test_no_source_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "markdown_text or markdown_file"):
+            MarkdownSplitterInput()
+
+
+class InputModelKvsStoreTests(unittest.TestCase):
+    def test_kvs_source_requires_kvs_store(self) -> None:
+        with self.assertRaisesRegex(ValidationError, "kvs_store"):
+            MarkdownSplitterInput(markdown_file="kvs://MY_KEY")
+
+    def test_kvs_source_with_store_is_valid(self) -> None:
+        obj = MarkdownSplitterInput(markdown_file="kvs://MY_KEY", kvs_store="abc123")
+        self.assertEqual(obj.kvs_store, "abc123")
+
+    def test_kvs_store_not_required_for_urls(self) -> None:
+        obj = MarkdownSplitterInput(markdown_file="https://example.com/a.md")
+        self.assertIsNone(obj.kvs_store)
+
+
 class InputModelFieldBoundsTests(unittest.TestCase):
     """Tests for numeric field boundaries."""
 
     def test_max_chunk_chars_accepts_positive(self) -> None:
         obj = MarkdownSplitterInput(markdown_text="# H", max_chunk_chars=1800)
         self.assertEqual(obj.max_chunk_chars, 1800)
+
+    def test_max_chunk_chars_defaults_to_about_400_tokens(self) -> None:
+        # ~400 tokens: Chroma's 2024 chunking study found 200-400 token
+        # recursive chunks consistently strong for retrieval.
+        obj = MarkdownSplitterInput(markdown_text="# H")
+        self.assertEqual(obj.max_chunk_chars, 1600)
+
+    def test_max_chunk_chars_null_disables_cap(self) -> None:
+        obj = MarkdownSplitterInput(markdown_text="# H", max_chunk_chars=None)
+        self.assertIsNone(obj.max_chunk_chars)
+
+    def test_max_chunk_chars_rejects_below_100(self) -> None:
+        # Tiny caps only multiply billed chunks and objects in memory.
+        with self.assertRaises(ValidationError):
+            MarkdownSplitterInput(markdown_text="# H", max_chunk_chars=99)
+
+    def test_max_chunk_chars_accepts_100(self) -> None:
+        obj = MarkdownSplitterInput(markdown_text="# H", max_chunk_chars=100)
+        self.assertEqual(obj.max_chunk_chars, 100)
 
     def test_max_chunk_chars_rejects_zero(self) -> None:
         with self.assertRaises(ValidationError):
@@ -270,6 +341,28 @@ class InputModelProxyTests(unittest.TestCase):
         )
         self.assertEqual(obj.proxy_url, "http://proxy.example.com:8080")
 
+    def test_empty_proxy_url_means_no_proxy(self) -> None:
+        for blank in ("", "   "):
+            obj = MarkdownSplitterInput(
+                markdown_file="https://example.com/a.pdf", proxy_url=blank
+            )
+            self.assertIsNone(obj.proxy_url)
+
+    def test_empty_proxy_url_does_not_conflict_with_apify_proxy(self) -> None:
+        obj = MarkdownSplitterInput(
+            markdown_file="https://example.com/a.pdf", proxy_url="", use_apify_proxy=True
+        )
+        self.assertTrue(obj.use_apify_proxy)
+
+    def test_invalid_proxy_error_does_not_leak_credentials(self) -> None:
+        # Validation errors reach run logs and the status message.
+        with self.assertRaises(ValidationError) as ctx:
+            MarkdownSplitterInput(
+                markdown_file="https://example.com/a.pdf",
+                proxy_url="ftp://user:s3cret@proxy.example.com:21",
+            )
+        self.assertNotIn("s3cret", str(ctx.exception))
+
     def test_proxy_url_accepted_in_text_mode(self) -> None:
         # Pin: proxy settings only affect file-mode fetches; text mode
         # accepts them without error (there is nothing to fetch).
@@ -403,6 +496,25 @@ class ProcessingMetricsTests(unittest.TestCase):
         self.assertIsNone(m.cached_chunk_count)
 
 
+class ProcessingMetricsChargeLimitTests(unittest.TestCase):
+    def test_charge_limit_reached_defaults_false(self) -> None:
+        m = ProcessingMetrics(
+            input_mode="text", input_chars=1, chunk_count=1, elapsed_ms=0, document_hash="a"
+        )
+        self.assertFalse(m.charge_limit_reached)
+
+    def test_charge_limit_reached_can_be_reported(self) -> None:
+        m = ProcessingMetrics(
+            input_mode="text",
+            input_chars=1,
+            chunk_count=125,
+            elapsed_ms=0,
+            document_hash="a",
+            charge_limit_reached=True,
+        )
+        self.assertTrue(m.charge_limit_reached)
+
+
 class InputModelSkipUnchangedTests(unittest.TestCase):
     def test_skip_if_unchanged_defaults_false(self) -> None:
         obj = MarkdownSplitterInput(markdown_text="# H")
@@ -451,6 +563,53 @@ class SourceFingerprintTests(unittest.TestCase):
 
     def test_is_16_lowercase_hex_chars(self) -> None:
         self.assertRegex(source_fingerprint(b"x", "text/html"), r"^[0-9a-f]{16}$")
+
+
+class CacheRecordKeyTests(unittest.TestCase):
+    _KEY_RE = r"^state-[0-9a-f]{24}$"  # valid KVS key characters, fixed length
+
+    def test_file_mode_keyed_by_source(self) -> None:
+        a = MarkdownSplitterInput(markdown_file="https://example.com/a.pdf")
+        b = MarkdownSplitterInput(markdown_file="https://example.com/b.pdf")
+        self.assertRegex(cache_record_key(a, "h1"), self._KEY_RE)
+        self.assertNotEqual(cache_record_key(a, "h1"), cache_record_key(b, "h1"))
+        # An edited document keeps the same record, so it is overwritten.
+        self.assertEqual(cache_record_key(a, "h1"), cache_record_key(a, "h2"))
+
+    def test_file_mode_ignores_surrounding_whitespace(self) -> None:
+        a = MarkdownSplitterInput(markdown_file="https://example.com/a.pdf")
+        b = MarkdownSplitterInput(markdown_file="  https://example.com/a.pdf ")
+        self.assertEqual(cache_record_key(a, "h"), cache_record_key(b, "h"))
+
+    def test_text_mode_keyed_by_document_hash(self) -> None:
+        p = MarkdownSplitterInput(markdown_text="# H")
+        self.assertRegex(cache_record_key(p, "h1"), self._KEY_RE)
+        self.assertNotEqual(cache_record_key(p, "h1"), cache_record_key(p, "h2"))
+
+
+class ReadCappedTests(unittest.IsolatedAsyncioTestCase):
+    @staticmethod
+    async def _parts(*parts: bytes):
+        for part in parts:
+            yield part
+
+    async def test_joins_parts_under_limit(self) -> None:
+        self.assertEqual(await read_capped(self._parts(b"ab", b"cd"), limit=10), b"abcd")
+
+    async def test_exactly_at_limit_passes(self) -> None:
+        self.assertEqual(await read_capped(self._parts(b"ab", b"cd"), limit=4), b"abcd")
+
+    async def test_over_limit_raises_without_reading_everything(self) -> None:
+        consumed: list[bytes] = []
+
+        async def parts():
+            for part in (b"abc", b"def", b"ghi"):
+                consumed.append(part)
+                yield part
+
+        with self.assertRaisesRegex(ValueError, "larger than"):
+            await read_capped(parts(), limit=5)
+        self.assertEqual(consumed, [b"abc", b"def"])
 
 
 class CacheHitTests(unittest.TestCase):
@@ -611,6 +770,18 @@ class FormatChunksTests(unittest.TestCase):
         ids = {c.chunk_id for c in chunks}
         self.assertEqual(len(ids), 5, "All chunk IDs must be unique")
 
+    def test_identical_chunks_get_distinct_ids(self) -> None:
+        # Two identical sections under the same headers are both pushed and
+        # billed; equal IDs would make a keyed upsert silently drop one.
+        doc = lambda: self._Doc("TODO", {"Header 1": "API", "Header 2": "Example"})  # noqa: E731
+        ids = [c.chunk_id for c in format_chunks([doc(), doc(), doc()])]
+        self.assertEqual(len(set(ids)), 3)
+
+    def test_first_occurrence_keeps_its_standalone_id(self) -> None:
+        alone = format_chunks([self._Doc("x", {})])[0].chunk_id
+        first, _second = format_chunks([self._Doc("x", {}), self._Doc("x", {})])
+        self.assertEqual(first.chunk_id, alone)
+
     def test_metadata_preserved(self) -> None:
         chunks = format_chunks([self._Doc("text", {"Header 1": "Intro", "Header 2": "Sub"})])
         self.assertEqual(chunks[0].metadata, {"Header 1": "Intro", "Header 2": "Sub"})
@@ -667,7 +838,7 @@ class ResolveMarkdownTextTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_file_mode_kvs_returns_value(self) -> None:
         params = MarkdownSplitterInput(
-            input_mode="file", markdown_file="kvs://MY_KEY"
+            input_mode="file", kvs_store="store", markdown_file="kvs://MY_KEY"
         )
         text, mime = await resolve_markdown_text(
             params=params,
@@ -681,7 +852,7 @@ class ResolveMarkdownTextTests(unittest.IsolatedAsyncioTestCase):
         received_keys: list[str] = []
 
         params = MarkdownSplitterInput(
-            input_mode="file", markdown_file="kvs://SOME_KEY"
+            input_mode="file", kvs_store="store", markdown_file="kvs://SOME_KEY"
         )
         await resolve_markdown_text(
             params=params,
@@ -692,7 +863,7 @@ class ResolveMarkdownTextTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_file_mode_rejects_empty_kvs_key(self) -> None:
         params = MarkdownSplitterInput(
-            input_mode="file", markdown_file="kvs://"
+            input_mode="file", kvs_store="store", markdown_file="kvs://"
         )
         with self.assertRaises(ValueError, msg="kvs:// with no key should raise"):
             await resolve_markdown_text(
@@ -796,7 +967,7 @@ class ResolveMarkdownTextTests(unittest.IsolatedAsyncioTestCase):
             return "# async kvs"
 
         params = MarkdownSplitterInput(
-            input_mode="file", markdown_file="kvs://MY_KEY"
+            input_mode="file", kvs_store="store", markdown_file="kvs://MY_KEY"
         )
         text, _ = await resolve_markdown_text(
             params=params,
@@ -851,7 +1022,7 @@ class ResolveMarkdownTextTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_load_kvs_non_string_result_raises(self) -> None:
         params = MarkdownSplitterInput(
-            input_mode="file", markdown_file="kvs://MY_KEY"
+            input_mode="file", kvs_store="store", markdown_file="kvs://MY_KEY"
         )
         with self.assertRaisesRegex(ValueError, "UTF-8 string"):
             await resolve_markdown_text(
@@ -967,6 +1138,27 @@ class SplitDocumentsTests(unittest.TestCase):
         )
         self.assertEqual(len(docs), 2)
 
+    def test_impossible_chunk_count_fails_before_resplitting(self) -> None:
+        # 100k chars at a 100-char cap need >= 1000 chunks; with
+        # max_chunks=10 the run must fail before building any of them.
+        text = "word " * 20_000
+        with patch(
+            "src.processing.RecursiveCharacterTextSplitter.split_documents",
+            side_effect=AssertionError("re-split should not run"),
+        ):
+            with self.assertRaisesRegex(ValueError, "max_chunks"):
+                split_documents(
+                    self._params(headers_to_split_on=[], max_chunk_chars=100, max_chunks=10),
+                    text,
+                )
+
+    def test_early_check_does_not_reject_feasible_splits(self) -> None:
+        text = "word " * 100  # 500 chars at a 200 cap: 3+ chunks
+        docs = split_documents(
+            self._params(headers_to_split_on=[], max_chunk_chars=200, max_chunks=5), text
+        )
+        self.assertLessEqual(len(docs), 5)
+
     def test_chunk_count_exceeding_max_chunks_raises(self) -> None:
         text = "# A\none\n\n# B\ntwo"
         with self.assertRaisesRegex(ValueError, "max_chunks"):
@@ -979,11 +1171,11 @@ class SplitDocumentsTests(unittest.TestCase):
 
 
 class SchemaCongruenceTests(unittest.TestCase):
-    """Pin the deliberate contract between INPUT_SCHEMA.json and the model.
+    """Pin the contract between INPUT_SCHEMA.json and the model.
 
-    The input_mode default intentionally diverges (schema: ``file`` for the
-    Console form, model: ``text`` for API callers); everything else must
-    stay in sync so the form and the validator never disagree.
+    The platform applies schema ``default`` values to API runs, so source
+    fields must only be prefilled (Console form and Apify's daily test),
+    never defaulted, or a caller's own input could be ignored.
     """
 
     @classmethod
@@ -991,24 +1183,39 @@ class SchemaCongruenceTests(unittest.TestCase):
         path = Path(__file__).resolve().parent.parent / ".actor" / "INPUT_SCHEMA.json"
         cls.schema = json.loads(path.read_text())
 
-    def test_input_mode_default_diverges_deliberately(self) -> None:
-        self.assertEqual(self.schema["properties"]["input_mode"]["default"], "file")
-        self.assertEqual(
-            MarkdownSplitterInput(markdown_text="# H").input_mode, "text"
-        )
+    def test_source_fields_have_no_defaults(self) -> None:
+        for field in ("input_mode", "markdown_text", "markdown_file"):
+            self.assertNotIn("default", self.schema["properties"][field], field)
+
+    def test_markdown_file_prefill_is_a_valid_url_input(self) -> None:
+        # Apify's daily test runs the prefilled input and needs chunks.
+        prefill = self.schema["properties"]["markdown_file"]["prefill"]
+        obj = MarkdownSplitterInput(markdown_file=prefill)
+        self.assertEqual(obj.input_mode, "file")
+
+    def test_kvs_store_is_a_read_only_store_picker(self) -> None:
+        field = self.schema["properties"]["kvs_store"]
+        self.assertEqual(field["editor"], "resourcePicker")
+        self.assertEqual(field["resourceType"], "keyValueStore")
+        self.assertEqual(field["resourcePermissions"], ["READ"])
 
     def test_numeric_limits_match_model(self) -> None:
         props = self.schema["properties"]
         cases = {
             "max_input_chars": {"default": 500_000, "minimum": 1, "maximum": 5_000_000},
             "max_chunks": {"default": 5_000, "minimum": 1, "maximum": 50_000},
-            "max_chunk_chars": {"minimum": 1, "maximum": 100_000},
+            "max_chunk_chars": {"default": 1600, "minimum": 100, "maximum": 100_000},
         }
         for field, expected in cases.items():
             for key, value in expected.items():
                 self.assertEqual(
                     props[field].get(key), value, f"{field}.{key} drifted from the model"
                 )
+
+    def test_null_chunk_cap_passes_platform_validation(self) -> None:
+        # The model accepts null to disable the cap; the platform validates
+        # API input against the schema first, so the field must be nullable.
+        self.assertIs(self.schema["properties"]["max_chunk_chars"].get("nullable"), True)
 
     def test_every_model_field_is_represented(self) -> None:
         schema_fields = set(self.schema["properties"])
@@ -1030,18 +1237,24 @@ class ConvertToMarkdownTests(unittest.TestCase):
 
         _Result.text_content = text_content  # type: ignore[attr-defined]
 
+        class _StreamInfo:
+            def __init__(self, **fields) -> None:
+                self.__dict__.update(fields)
+
         class _Converter:
             def __init__(self) -> None:
-                self.last_mimetype: str | None = None
+                self.last_info: _StreamInfo | None = None
 
-            def convert_stream(self, _stream, mimetype=None):
-                self.last_mimetype = mimetype
+            # Strict like markitdown 0.1.x: hints only via stream_info.
+            def convert_stream(self, _stream, *, stream_info=None):
+                self.last_info = stream_info
                 return _Result()
 
         _instance = _Converter()
 
         fake = ModuleType("markitdown")
         fake.MarkItDown = lambda enable_plugins=False: _instance  # type: ignore[attr-defined]
+        fake.StreamInfo = _StreamInfo  # type: ignore[attr-defined]
         fake._instance = _instance  # type: ignore[attr-defined]
         return fake
 
@@ -1055,13 +1268,43 @@ class ConvertToMarkdownTests(unittest.TestCase):
         fake = self._fake_markitdown_module("# ok")
         with patch.dict("sys.modules", {"markitdown": fake}):
             convert_to_markdown(b"data", "application/pdf")
-        self.assertEqual(fake._instance.last_mimetype, "application/pdf")  # type: ignore[attr-defined]
+        self.assertEqual(fake._instance.last_info.mimetype, "application/pdf")  # type: ignore[attr-defined]
 
-    def test_empty_content_type_uses_octet_stream(self) -> None:
+    def test_empty_content_type_leaves_mimetype_to_sniffing(self) -> None:
         fake = self._fake_markitdown_module("# ok")
         with patch.dict("sys.modules", {"markitdown": fake}):
             convert_to_markdown(b"data", "")
-        self.assertEqual(fake._instance.last_mimetype, "application/octet-stream")  # type: ignore[attr-defined]
+        self.assertIsNone(fake._instance.last_info.mimetype)  # type: ignore[attr-defined]
+
+    def test_splits_charset_and_passes_url_and_extension(self) -> None:
+        fake = self._fake_markitdown_module("# ok")
+        with patch.dict("sys.modules", {"markitdown": fake}):
+            convert_to_markdown(
+                b"data",
+                "Text/HTML; charset=ISO-8859-1",
+                url="https://example.com/docs/page.HTML?x=1",
+            )
+        info = fake._instance.last_info  # type: ignore[attr-defined]
+        self.assertEqual(info.mimetype, "text/html")
+        self.assertEqual(info.charset, "ISO-8859-1")
+        self.assertEqual(info.url, "https://example.com/docs/page.HTML?x=1")
+        self.assertEqual(info.extension, ".html")
+
+    def test_octet_stream_is_treated_as_unknown(self) -> None:
+        # Servers send octet-stream for any binary; let markitdown sniff.
+        fake = self._fake_markitdown_module("# ok")
+        with patch.dict("sys.modules", {"markitdown": fake}):
+            convert_to_markdown(b"data", "application/octet-stream")
+        self.assertIsNone(fake._instance.last_info.mimetype)  # type: ignore[attr-defined]
+
+    def test_real_markitdown_honours_declared_charset(self) -> None:
+        html = "<h1>Menu</h1><p>café</p>".encode("latin-1")
+        result = convert_to_markdown(html, "text/html; charset=ISO-8859-1")
+        self.assertIn("café", result)
+
+    def test_real_markitdown_converts_declared_csv_to_table(self) -> None:
+        result = convert_to_markdown(b"name,qty\napple,3\n", "text/csv")
+        self.assertIn("| name | qty |", result)
 
     def test_raises_when_result_is_none(self) -> None:
         fake = self._fake_markitdown_module(None)
@@ -1081,7 +1324,7 @@ class ConvertToMarkdownTests(unittest.TestCase):
         received_streams: list[bytes] = []
 
         class _Converter:
-            def convert_stream(self, stream, mimetype=None):
+            def convert_stream(self, stream, *, stream_info=None):
                 received_streams.append(stream.read())
 
                 class _R:
@@ -1091,6 +1334,7 @@ class ConvertToMarkdownTests(unittest.TestCase):
 
         fake = ModuleType("markitdown")
         fake.MarkItDown = lambda enable_plugins=False: _Converter()  # type: ignore[attr-defined]
+        fake.StreamInfo = lambda **fields: fields  # type: ignore[attr-defined]
         with patch.dict("sys.modules", {"markitdown": fake}):
             convert_to_markdown(b"\x25\x50\x44\x46", "application/pdf")
 

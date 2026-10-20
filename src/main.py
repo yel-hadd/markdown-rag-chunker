@@ -4,7 +4,6 @@ This is the only module that touches Apify or the network; everything else
 lives in pure, injectable functions (see ``processing.py`` and ``models.py``).
 """
 
-import hashlib
 import time
 
 from apify import Actor
@@ -13,32 +12,24 @@ from curl_cffi.requests import AsyncSession
 from .models import MarkdownSplitterInput, ProcessingMetrics
 from .processing import (
     cache_hit,
+    cache_record_key,
     document_hash,
     format_chunks,
+    read_capped,
     resolve_markdown_text,
     source_fingerprint,
     split_config_fingerprint,
     split_documents,
 )
 
-#: Key holding the change-detection state inside each cache store.
-_CACHE_RECORD_KEY = "state"
+#: Named key-value store (in the run user's account) holding one
+#: change-detection record per source.
+_CACHE_STORE_NAME = "markdown-rag-chunker-cache"
 
-
-def _cache_store_name(params: MarkdownSplitterInput, doc_hash: str | None) -> str:
-    """Name of the per-source cache store for change detection.
-
-    File-mode sources are keyed by their URL/`kvs://` string so that an
-    edited document overwrites the previous state; text mode is keyed by
-    the document hash itself so identical text always finds its cache.
-    """
-    source = (
-        params.markdown_file.strip()
-        if params.input_mode == "file" and params.markdown_file
-        else f"hash:{doc_hash}"
-    )
-    digest = hashlib.sha256(source.encode("utf-8")).hexdigest()[:24]
-    return f"markdown-rag-chunker-cache-{digest}"
+#: Largest remote file accepted, after decompression. Binary formats (PDF,
+#: DOCX, PPTX) are much larger than their text, so this is independent of
+#: max_input_chars, which is checked on the converted text.
+_MAX_DOWNLOAD_BYTES = 25_000_000
 
 
 async def main():
@@ -68,40 +59,58 @@ async def main():
                 # curl_cffi impersonates a real Chrome TLS/HTTP2 fingerprint
                 # (including header order), so plain HTTP clients blocked by
                 # anti-bot filters (e.g. Wikipedia 403s python-httpx) succeed.
-                timeout_seconds = 30
+                # The body is streamed so oversized files fail before they
+                # fill memory, with or without a Content-Length header.
                 async with AsyncSession(
-                    impersonate="chrome", timeout=timeout_seconds, proxy=fetch_proxy
+                    impersonate="chrome", timeout=30, proxy=fetch_proxy
                 ) as session:
-                    response = await session.get(url)
-                response.raise_for_status()
-                try:
-                    content_length = int(response.headers.get("content-length", ""))
-                except ValueError:
-                    content_length = None
-                if content_length is not None:
-                    # Fail fast on oversized downloads: 4 bytes/char is a safe
-                    # upper bound for UTF-8 input before conversion.
-                    max_bytes = params.max_input_chars * 4
-                    if content_length > max_bytes:
-                        raise ValueError(
-                            f"Remote file is {content_length} bytes, which exceeds the "
-                            f"max_input_chars budget ({params.max_input_chars} chars "
-                            f"~ {max_bytes} bytes)."
-                        )
+                    response = await session.get(url, stream=True)
+                    try:
+                        response.raise_for_status()
+                        declared = response.headers.get("content-length", "")
+                        if declared.isdigit() and int(declared) > _MAX_DOWNLOAD_BYTES:
+                            raise ValueError(
+                                f"Remote file is {int(declared)} bytes, larger than "
+                                f"the {_MAX_DOWNLOAD_BYTES // 1_000_000} MB download limit."
+                            )
+                        raw = await read_capped(response.aiter_content(), _MAX_DOWNLOAD_BYTES)
+                    finally:
+                        await response.aclose()
                 content_type = response.headers.get("content-type", "application/octet-stream")
-                return response.content, content_type
+                return raw, content_type
 
             async def load_kvs(key: str) -> str:
-                value = await Actor.get_value(key)
+                # The store comes from the kvs_store picker, which grants this
+                # limited-permission run read access to it.
+                store = await Actor.open_key_value_store(id=params.kvs_store)
+                value = await store.get_value(key)
                 if value is None:
-                    raise ValueError(f"No key-value store record found for '{key}'.")
+                    raise ValueError(f"No record '{key}' in the selected key-value store.")
+                if isinstance(value, bytes):
+                    try:
+                        value = value.decode("utf-8")
+                    except UnicodeDecodeError as exc:
+                        raise ValueError(f"Record '{key}' is not UTF-8 text.") from exc
                 if not isinstance(value, str):
-                    raise ValueError(
-                        f"Key-value store record '{key}' must be a plain string."
-                    )
+                    raise ValueError(f"Record '{key}' must be a plain text record.")
                 return value
 
             config_fingerprint = split_config_fingerprint(params)
+            cache_store = None
+            cache_key = ""
+            cached_state: object = None
+
+            async def read_cache(doc_hash: str) -> object:
+                # Cache failures never fail the run; they just re-process.
+                nonlocal cache_store, cache_key
+                cache_key = cache_record_key(params, doc_hash)
+                try:
+                    cache_store = await Actor.open_key_value_store(name=_CACHE_STORE_NAME)
+                    return await cache_store.get_value(cache_key)
+                except Exception as exc:
+                    Actor.log.warning(f"Cache read skipped: {exc}")
+                    cache_store = None
+                    return None
 
             async def finish_unchanged(
                 state: dict, doc_hash: str, input_chars: int, input_file_type: str
@@ -122,23 +131,10 @@ async def main():
                     "chunking. No dataset items were pushed or billed."
                 )
 
-            async def read_cache(doc_hash: str | None) -> tuple[object, object]:
-                # Cache failures never fail the run; they just re-process.
-                try:
-                    store = await Actor.open_key_value_store(
-                        name=_cache_store_name(params, doc_hash)
-                    )
-                    return store, await store.get_value(_CACHE_RECORD_KEY)
-                except Exception as exc:
-                    Actor.log.warning(f"Cache read skipped: {exc}")
-                    return None, None
-
             # Change detection (skip_if_unchanged) runs in two steps. File
             # mode first compares the raw download, so an unchanged file
             # skips conversion entirely; otherwise the converted Markdown
             # hash is compared (catches pages whose bytes vary per fetch).
-            cache_store = None
-            cached_state: object = None
             source_hash: str | None = None
             payload: tuple[bytes, str] | None = None
             source = (params.markdown_file or "").strip()
@@ -146,7 +142,8 @@ async def main():
                 payload = await fetch_remote(source)
                 source_hash = source_fingerprint(*payload)
                 if params.skip_if_unchanged:
-                    cache_store, cached_state = await read_cache(None)
+                    # File-mode records are keyed by source, not by hash.
+                    cached_state = await read_cache("")
                     if cache_hit(cached_state, config_fingerprint, source_hash=source_hash):
                         # Not converted this run: report the cached document's stats.
                         await finish_unchanged(
@@ -166,8 +163,8 @@ async def main():
             doc_hash = document_hash(markdown_text)
 
             if params.skip_if_unchanged:
-                if cache_store is None:
-                    cache_store, cached_state = await read_cache(doc_hash)
+                if not cache_key:
+                    cached_state = await read_cache(doc_hash)
                 if cache_hit(cached_state, config_fingerprint, document_hash=doc_hash):
                     await finish_unchanged(
                         cached_state, doc_hash, len(markdown_text), input_file_type
@@ -178,34 +175,45 @@ async def main():
             # pass, max_chunks enforced) and format one record per chunk.
             chunks = format_chunks(split_documents(params, markdown_text))
 
-            elapsed_ms = int((time.perf_counter() - started_at) * 1000)
+            # One dataset item per chunk: users pay per chunk (matches the
+            # published pay-per-event pricing). When the user's maximum
+            # charge per run is reached, the SDK pushes only what fits.
+            pushed = len(chunks)
+            limit_reached = False
+            if chunks:
+                result = await Actor.push_data([chunk.model_dump() for chunk in chunks])
+                if result.event_charge_limit_reached and result.charged_count < len(chunks):
+                    pushed, limit_reached = result.charged_count, True
+                    Actor.log.warning(
+                        f"Maximum charge per run reached: delivered {pushed} of "
+                        f"{len(chunks)} chunks. Raise the limit to get the rest."
+                    )
+
+            # Run metrics go to the named OUTPUT record in the default
+            # key-value store, which is not billed as a dataset item.
+            # exclude_none keeps the record free of null placeholders.
             metrics = ProcessingMetrics(
                 input_mode=params.input_mode,
                 input_file_type=input_file_type,
                 input_chars=len(markdown_text),
-                chunk_count=len(chunks),
-                elapsed_ms=elapsed_ms,
+                chunk_count=pushed,
+                elapsed_ms=int((time.perf_counter() - started_at) * 1000),
                 document_hash=doc_hash,
+                charge_limit_reached=limit_reached,
             )
-
-            # One dataset item per chunk: users pay per chunk (matches the
-            # published pay-per-event pricing). Metrics go to the named
-            # OUTPUT record in the default key-value store (the Python SDK's
-            # equivalent of set_output), which is not billed as a dataset item.
-            # exclude_none keeps the record free of null placeholders.
             await Actor.set_value("OUTPUT", metrics.model_dump(exclude_none=True))
-            if chunks:
-                await Actor.push_data([chunk.model_dump() for chunk in chunks])
 
-            if cache_store is not None:
+            # Only a complete delivery may be cached: otherwise later runs
+            # would skip a document whose chunks never fully arrived.
+            if cache_store is not None and not limit_reached:
                 try:
                     await cache_store.set_value(
-                        _CACHE_RECORD_KEY,
+                        cache_key,
                         {
                             "document_hash": doc_hash,
                             "source_hash": source_hash,
                             "split_config": config_fingerprint,
-                            "chunk_count": len(chunks),
+                            "chunk_count": pushed,
                             "input_chars": len(markdown_text),
                             "input_file_type": input_file_type,
                         },
